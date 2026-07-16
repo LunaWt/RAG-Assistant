@@ -1,0 +1,29 @@
+# Environment
+.env
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+
+# Runtime data (Chroma indexes, SQLite chat.db, uploaded files)
+app/storage/
+
+# Multi-model review reports
+reviews/
+
+# Logs
+logs/*.log
+
+# Code
+old_code.py
