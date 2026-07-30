@@ -1,6 +1,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote_plus
 
@@ -29,7 +30,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(version='1.0', description='Fastapi endpoints for RAG-agent', lifespan=lifespan)
+app = FastAPI(
+    version="1.0", description="Fastapi endpoints for RAG-agent", lifespan=lifespan
+)
+
+
+def as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+
+    return value.astimezone(timezone.utc)
 
 
 async def get_db():
@@ -59,11 +69,8 @@ def build_prompt(query: str, retrieved_chunks: list[str]) -> str:
             retrieved chunks: {"\n\n".join(retrieved_chunks)}"""
 
 
-@app.get('/documents')
-def search_uploaded_documents(
-    filename: str | None = None, 
-    limit: int| None = None
-    ):
+@app.get("/documents")
+def search_uploaded_documents(filename: str | None = None, limit: int | None = None):
     if filename:
         return vector_db.get_documents(filename=filename)
     elif limit:
@@ -112,21 +119,15 @@ def delete_document(filename: str):
 
 
 @app.get("/ask")
-def ask_rag_bot(
-    query: str, 
-    filename: str | None = None
-    ) -> StreamingResponse:
-    
+def ask_rag_bot(query: str, filename: str | None = None) -> StreamingResponse:
+
     if filename:
         retrieved_chunks = vector_db.rag_search(query, filename)
     else:
         retrieved_chunks = vector_db.rag_search(query)
-    
+
     prompt = build_prompt(query, retrieved_chunks)
-    return StreamingResponse(
-        generate_response(prompt),
-        media_type='text/plain'
-    )
+    return StreamingResponse(generate_response(prompt), media_type="text/plain")
 
 
 @app.post("/upload-document")
@@ -151,6 +152,9 @@ async def upload_document(file: UploadFile = File()):
     except ValueError as e:
         file_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail='Ошибка сервера') from e
 
     return {
         "status": "success",
@@ -165,14 +169,14 @@ async def create_chat_session(db: AsyncSession = Depends(get_db)):
     chat = ChatSession()
     db.add(chat)
     await db.commit()
-    return {"id": chat.id, "title": chat.title, "created_at": chat.created_at}
+    return {"id": chat.id, "title": chat.title, "created_at": as_utc(chat.created_at)}
 
 
 @app.get("/sessions")
 async def list_chat_sessions(db: AsyncSession = Depends(get_db)):
     sessions = await db.scalars(select(ChatSession).order_by(ChatSession.id.desc()))
     return [
-        {"id": s.id, "title": s.title, "created_at": s.created_at}
+        {"id": s.id, "title": s.title, "created_at": as_utc(s.created_at)}
         for s in sessions
     ]
 
@@ -193,7 +197,11 @@ async def get_session_messages(session_id: int, db: AsyncSession = Depends(get_d
             {
                 "id": m.id,
                 "role": m.role,
-                "blocks": [{"type": b.type, "content": b.content} for b in m.blocks],
+                "blocks": [{
+                    "type": b.type, 
+                    "content": b.content, 
+                } 
+                for b in m.blocks],
             }
             for m in chat.messages
         ],
@@ -258,7 +266,8 @@ async def load_history(session_id: int) -> list[dict] | None:
     history: list[dict] = []
     for m in chat.messages:
         text = "\n".join(
-            b.content for b in m.blocks
+            b.content
+            for b in m.blocks
             if b.type in ("user-query", "answer") and b.content
         )
         if text:
@@ -284,14 +293,16 @@ async def set_session_title(session_id: int, query: str) -> None:
 
 async def save_message(session_id: int, role: str, blocks: list[dict]) -> None:
     async with SessionLocal() as db:
-        db.add(Message(
-            session_id=session_id,
-            role=role,
-            blocks=[
-                Block(type=b["type"], content=b["content"], position=i)
-                for i, b in enumerate(blocks)
-            ],
-        ))
+        db.add(
+            Message(
+                session_id=session_id,
+                role=role,
+                blocks=[
+                    Block(type=b["type"], content=b["content"], position=i)
+                    for i, b in enumerate(blocks)
+                ],
+            )
+        )
         await db.commit()
 
 
@@ -331,10 +342,18 @@ async def chat_rag_bot(body: ChatRequest) -> StreamingResponse:
     if body.session_id is not None:
         history = await load_history(body.session_id)
         if history is None:
-            raise HTTPException(status_code=404, detail=f"Session not found: {body.session_id}")
-        await save_message(body.session_id, "user", [{"type": "user-query", "content": body.query}])
-        if not history:  # was empty before this message → first message, title in background
-            title_task = asyncio.create_task(set_session_title(body.session_id, body.query))
+            raise HTTPException(
+                status_code=404, detail=f"Session not found: {body.session_id}"
+            )
+        await save_message(
+            body.session_id, "user", [{"type": "user-query", "content": body.query}]
+        )
+        if (
+            not history
+        ):  # was empty before this message → first message, title in background
+            title_task = asyncio.create_task(
+                set_session_title(body.session_id, body.query)
+            )
             _background_tasks.add(title_task)
             title_task.add_done_callback(_background_tasks.discard)
 
@@ -350,18 +369,6 @@ async def chat_rag_bot(body: ChatRequest) -> StreamingResponse:
             event = await queue.get()
             if event is None:
                 break
-            yield json.dumps(event, ensure_ascii=False) + '\n'
+            yield json.dumps(event, ensure_ascii=False) + "\n"
 
-    return StreamingResponse(
-        event_stream(),
-        media_type='text/x-ndjson'
-    )
-
-
-
-
-
-
-
-
-
+    return StreamingResponse(event_stream(), media_type="text/x-ndjson")

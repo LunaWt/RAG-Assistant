@@ -22,6 +22,10 @@ app/storage/
 # Multi-model review reports
 reviews/
 
+# Agent working notes (execution ledger, deferred milestone definitions)
+CLAUDE.md
+docs/
+
 # Logs
 logs/*.log
 

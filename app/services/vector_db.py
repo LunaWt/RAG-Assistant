@@ -6,7 +6,7 @@ from sentence_transformers import SentenceTransformer
 from pathlib import Path
 
 
-class VectorDB():
+class VectorDB:
     def __init__(self, path, collection_name, model_name):
         self.client = chromadb.PersistentClient(path=path)
         self.collection = self.client.get_or_create_collection(name=collection_name)
@@ -18,7 +18,7 @@ class VectorDB():
     def model(self):
         """Lazy-load the embedder on first use — keeps import/startup fast."""
         if self._model is None:
-            with self._model_lock:            # double-checked: only one thread loads
+            with self._model_lock:  # double-checked: only one thread loads
                 if self._model is None:
                     self._model = SentenceTransformer(self.model_name)
         return self._model
@@ -30,11 +30,14 @@ class VectorDB():
         except Exception as e:
             print(f"⚠️ embedder warm-up failed (will lazy-load on first use): {e}")
 
-    def add_document_to_db(self,
+    def add_document_to_db(
+        self,
         chunks: list[str],
-        filename: str):
+        filename: str,
+    ) -> None:
 
         ids = [f"{filename}_chunk_{i}" for i in range(len(chunks))]
+        new_ids = set(ids)
 
         embeddings = self.model.encode(chunks, normalize_embeddings=True).tolist()
 
@@ -44,23 +47,30 @@ class VectorDB():
             ids=ids,
             embeddings=embeddings,
             documents=chunks,
-            metadatas=metadatas
+            metadatas=metadatas,
         )
-        print(f"✅ В базу добавлено {len(chunks)} чанков из файла {filename}")
+        current_ids = (
+            self.collection.get(
+                where={"source": filename},
+                include=[],
+            ).get("ids")
+            or []
+        )
+        stale_ids = [chunk_id for chunk_id in current_ids if chunk_id not in new_ids]
+        if stale_ids:
+            self.collection.delete(ids=stale_ids)
+            print(f"🗑️ Удалены устаревшие чанки: {stale_ids}")
 
+        print(f"✅ В базу добавлено {len(chunks)} чанков из файла {filename}")
 
     def rag_search(self, query: str, filename: str = None) -> list[str]:
         query_vector = self.model.encode([query], normalize_embeddings=True).tolist()
-        search_params = {
-            "query_embeddings": query_vector,
-            "n_results": 3
-        }
+        search_params = {"query_embeddings": query_vector, "n_results": 3}
         if filename:
-            search_params['where'] = {"source": filename}
+            search_params["where"] = {"source": filename}
 
         results = self.collection.query(**search_params)
-        return results['documents'][0]
-
+        return results["documents"][0]
 
     def list_sources(self) -> list[str]:
         data = self.collection.get(include=["metadatas"])
@@ -86,28 +96,18 @@ class VectorDB():
         )
         return data.get("documents") or []
 
-    def get_documents(
-        self,
-        filename: str | None = None,
-        limit: int | None = None
-        ):
+    def get_documents(self, filename: str | None = None, limit: int | None = None):
         if filename:
             return self.collection.get(
-                include=['metadatas'],
-                where={'source': filename}
+                include=["metadatas"], where={"source": filename}
             )
         if limit:
-            return self.collection.get(
-                include=['metadatas'],
-                limit=limit
-            )
-        return self.collection.get(
-                include=['metadatas']
-            )
+            return self.collection.get(include=["metadatas"], limit=limit)
+        return self.collection.get(include=["metadatas"])
 
 
 vector_db = VectorDB(
-    path=str(Path(settings.storage_dir) / 'chroma'),
-    collection_name='rag_documents',
+    path=str(Path(settings.storage_dir) / "chroma"),
+    collection_name="rag_documents",
     model_name=settings.embedding_model,
-    )
+)
