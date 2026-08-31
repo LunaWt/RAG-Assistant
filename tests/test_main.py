@@ -2,6 +2,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn
+import asyncio
 import json
 
 
@@ -564,3 +565,235 @@ async def test_upload_document_fail(
     assert resp.status_code == 500
     assert resp.json()['detail'] == 'Ошибка сервера'
     assert list(storage_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_user_gets_events_expected_order(
+    async_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events = [
+            {'type': 'thought_delta', 'text': 'Looking'},
+            {'type': 'thought_delta', 'text': 'into db'},
+            {
+                'type': 'tool_hits', 
+                'query': 'California check', 
+                'hits': [
+                    {
+                        'title': 'California weather',
+                        'href': 'https://weather.com',
+                    }
+                ]
+            },
+            {'type': 'text_delta', 'text': 'The weather in california'},
+            {'type': 'text_delta', 'text': 'is sunny.'},
+            {'type': 'done'}
+        ]
+    async def fake_agent_loop(query, history):
+        for event in events:
+            yield event
+
+    monkeypatch.setattr(
+        main_module,
+        'agent_loop',
+        fake_agent_loop
+    )
+
+    async with async_client.stream(
+        'POST', 
+        '/chat', 
+        json={
+            'query': ' Weather in California?', 
+        }
+    ) as response:
+        lines = [json.loads(line) async for line in response.aiter_lines()]
+        
+    assert response.status_code == 200
+    assert (response.headers['content-type']).startswith('text/x-ndjson')
+    assert lines == events
+
+
+@pytest.mark.asyncio
+async def test_chat_persists_assembled_blocks_after_done(
+    async_client: AsyncClient,
+    chat_info: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events = [
+            {'type': 'thought_delta', 'text': 'Looking'},
+            {'type': 'thought_delta', 'text': ' into db'},
+            {
+                'type': 'tool_hits', 
+                'query': 'California check', 
+                'hits': [
+                    {
+                        'title': 'California weather',
+                        'href': 'https://weather.com',
+                    }
+                ]
+            },
+            {'type': 'text_delta', 'text': 'The weather in california'},
+            {'type': 'text_delta', 'text': ' is sunny.'},
+            {'type': 'done'}
+        ]
+    async def fake_agent_loop(query, history):
+        for event in events:
+            yield event
+
+    monkeypatch.setattr(
+        main_module,
+        'agent_loop',
+        fake_agent_loop
+    )
+    session_id = chat_info['chat_id']
+
+    async with async_client.stream(
+        'POST', 
+        '/chat', 
+        json={
+            'query': 'Weather in California?',
+            'session_id': session_id
+            }
+    ) as response:
+        lines = [json.loads(line) async for line in response.aiter_lines()] 
+
+    messages_response = await async_client.get(
+            f'/sessions/{session_id}/messages'
+        )
+    messages = messages_response.json()['messages']
+    user_message_blocks = messages[-2]['blocks']
+    assistant_message_blocks = messages[-1]['blocks']
+    tool_content = json.dumps({"query": "California check", "hits": [{"title": "California weather", "href": "https://weather.com"}]}, ensure_ascii=False)
+
+    assert messages_response.status_code == 200
+    assert len(messages) == 4
+    assert user_message_blocks == [{
+        'type': 'user-query',
+        'content': 'Weather in California?'
+        }
+    ]
+    assert assistant_message_blocks == [
+        {
+            'type': 'thought', 'content': 'Looking into db'
+        },
+        {
+        "type": "tool",
+        "content": tool_content,
+        },
+        {
+            'type': 'answer', 'content': 'The weather in california is sunny.'
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_does_not_save_assistant_without_done(
+    async_client: AsyncClient,
+    chat_info: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events = [
+            {'type': 'thought_delta', 'text': 'Looking'},
+            {'type': 'thought_delta', 'text': ' into db'},
+            {
+                'type': 'tool_hits', 
+                'query': 'California check', 
+                'hits': [
+                    {
+                        'title': 'California weather',
+                        'href': 'https://weather.com',
+                    }
+                ]
+            },
+            {'type': 'text_delta', 'text': 'The weather in california'},
+            {'type': 'text_delta', 'text': ' is sunny.'},
+        ]
+    async def fake_agent_loop(query, history):
+        for event in events:
+            yield event
+
+    monkeypatch.setattr(
+        main_module,
+        'agent_loop',
+        fake_agent_loop
+    )
+    session_id = chat_info['chat_id']
+
+    async with async_client.stream(
+        'POST', 
+        '/chat', 
+        json={
+            'query': 'Weather in California?',
+            'session_id': session_id
+            }
+    ) as response:
+        async for _ in response.aiter_lines():
+           pass
+
+    messages_response = await async_client.get(
+            f'/sessions/{session_id}/messages'
+        )
+    messages = messages_response.json()['messages']
+
+    assert messages_response.status_code == 200
+    assert len(messages) == 3
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert messages[-1]["blocks"] == [
+        {
+            "type": "user-query",
+            "content": "Weather in California?",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_new_chat_title_is_generated_in_background(
+    async_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch
+): 
+    session_id = (await async_client.post('/sessions')).json()['id']
+    release_title = asyncio.Event()
+    received_queries = []
+
+    async def fake_generate_title(query):
+        received_queries.append(query)
+        await release_title.wait()
+        return 'Fake title'
+
+    async def fake_agent_loop(query, history):
+        for event in [{'type': 'done'}]:
+            yield event
+
+    monkeypatch.setattr(
+        main_module,
+        'agent_loop',
+        fake_agent_loop
+    )
+    monkeypatch.setattr(
+        main_module,
+        'generate_title',
+        fake_generate_title
+    )
+    async with asyncio.timeout(2):
+        async with async_client.stream(
+            'POST',
+            '/chat',
+            json={'query': 'Whatever', 'session_id': session_id}
+        ) as response:
+            async for _ in response.aiter_lines():
+                pass
+
+    get_old_title = await async_client.get('/sessions')
+    assert get_old_title.json()[0]['title'] == 'New chat'
+
+    release_title.set()
+    async with asyncio.timeout(1):
+        await asyncio.gather(*main_module._background_tasks)
+
+    listed = (await async_client.get('/sessions')).json()
+    assert listed[0]['title'] == 'Fake title'
+    assert received_queries == ['Whatever']

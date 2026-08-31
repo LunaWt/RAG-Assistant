@@ -1,11 +1,15 @@
-# Environment
+# Environment — .env holds real API keys; .env.example is the tracked template
 .env
+.env.*
+!.env.example
 venv/
 env/
+.venv/
 
-# IDE
+# IDE / OS
 .vscode/
 .idea/
+.DS_Store
 
 # Python
 __pycache__/
@@ -18,16 +22,23 @@ __pycache__/
 
 # Runtime data (Chroma indexes, SQLite chat.db, uploaded files)
 app/storage/
+*.db
 
 # Multi-model review reports
 reviews/
 
-# Agent working notes (execution ledger, deferred milestone definitions)
+# Agent working notes: execution ledger and deferred milestone definitions.
+# Personal — goals, progress, session state. Keep them out of the repo.
 CLAUDE.md
 docs/
 
-# Logs
-logs/*.log
+# Local learning artifacts
+explainer-*.html
 
-# Code
+# Logs
+logs/
+*.log
+
+# Parked / scratch
 old_code.py
+*.parked

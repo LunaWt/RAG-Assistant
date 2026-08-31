@@ -3,6 +3,8 @@ from app.services.tools import search_knowledge_base, web_search, calculator
 from app.services.vector_db import vector_db
 from app.config import settings
 from google.genai import types
+from google.genai.errors import APIError
+from httpx import TransportError
 import asyncio
 import inspect
 
@@ -11,6 +13,11 @@ TOOLS = {
     "search_knowledge_base": search_knowledge_base,
     "web_search": web_search,
 }
+RETRYABLE_API_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
+RETRIES = 5
+BASE_DELAY = 1.0   # seconds before the first retry
+MAX_DELAY = 8.0
+MAX_ITERATIONS = 20  # tool rounds per answer, before the model is asked to conclude
 
 async def run_tool(fc: types.FunctionCall) -> tuple[types.Part, list[dict] | None]:
     if fc.name not in TOOLS or not fc.args:
@@ -103,15 +110,20 @@ def to_gemini_history(history: list[dict] | None) -> list[types.Content]:
     return contents
 
 
+def is_retryable(e: Exception) -> bool:
+    if isinstance(e, APIError):
+        return e.code in RETRYABLE_API_CODES
+    return isinstance(e, (TransportError, TimeoutError))
+    
+
+    
 async def agent_loop(query: str, history: list[dict] | None = None):
     """
     Agent loop for the application.
     """
-    max_iterations = 20
     iterations = 0
-    retries = 10
 
-    for attempt in range(retries):
+    for attempt in range(RETRIES):
         try:
             iterations = 0
             chat = client.aio.chats.create(
@@ -144,7 +156,7 @@ async def agent_loop(query: str, history: list[dict] | None = None):
                 yield {"type": "done"}
                 return
 
-            while iterations <= max_iterations:
+            while iterations < MAX_ITERATIONS:
                 
                 yield {"type": "tool_start", "name": [call.name for call in calls], "args": [call.args for call in calls]}
                 results = await asyncio.gather(*[run_tool(fc) for fc in calls])
@@ -184,11 +196,24 @@ async def agent_loop(query: str, history: list[dict] | None = None):
             return
 
         except Exception as e:
-            print(f'Ошибка обработки {e}')
+            print(f'Error {e}, Agent attempt {attempt+1}/{RETRIES} failed')
             yield {"type": "stream_reset"}
-            if attempt == retries - 1:
-                yield {"type": "error", "message": f"Ошибка агента после {retries} попыток: {e}"}
+
+            if not is_retryable(e):
+                yield {
+                    'type': 'error', 
+                    'message': 'Something went wrong on our side. The request cannot be completed.'
+                }
                 return
+            
+            if attempt == RETRIES - 1:
+                yield {
+                    "type": "error", 
+                    'message': 'The model is unavailable right now, please try again in a moment.'
+                }
+                return
+            await asyncio.sleep(min(BASE_DELAY * 2 ** attempt, MAX_DELAY))
+                
 
 async def main():
     async for chunk in agent_loop('Привет! Какая погода в калифорнии?'):
