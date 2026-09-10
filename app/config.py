@@ -6,6 +6,7 @@ class Settings(BaseSettings):
 
     ## LLM
     gemini_api_key: str
+    gemini_proxy_url: str | None = None
     hf_token: str
     main_model: str = 'gemma-4-26b-a4b-it'
     summary_model: str = 'gemini-3.1-flash-lite'
@@ -35,9 +36,11 @@ class Settings(BaseSettings):
         Format: coherent paragraph(s)."""
     
     ## RAG
-    chunk_size: int = 1000
-    overlap: int = 50
+    chunk_size: int = 3000
+    overlap: int = 300
     embedding_model: str = "BAAI/bge-m3"
+    embedding_device: str | None = None
+    embedding_batch_size: int = 16
     dimension: int = 1024
 
     ## STORAGE

@@ -46,23 +46,6 @@ async def run_tool(fc: types.FunctionCall) -> tuple[types.Part, list[dict] | Non
             name=fc.name,
             response={'result': f"Error running tool: {e}"},
         ), []
-    
-
-
-# def parse_turn(response) -> tuple[str, str, list]:
-#     """Текст этого хода + tool calls (если есть)."""
-#     partial_text = ""
-#     thoughts = ""
-#     for part in response.parts or []:
-#         if part.text:
-#             if part.thought:
-#                 thoughts += part.thoughts
-#             else:
-#                 partial_text += part.text
-          
-
-#     calls = list(response.function_calls or [])
-#     return thoughts, partial_text.strip(), calls
 
 
 def _assistant_text(msg: dict) -> str:
@@ -114,9 +97,8 @@ def is_retryable(e: Exception) -> bool:
     if isinstance(e, APIError):
         return e.code in RETRYABLE_API_CODES
     return isinstance(e, (TransportError, TimeoutError))
-    
 
-    
+
 async def agent_loop(query: str, history: list[dict] | None = None):
     """
     Agent loop for the application.
@@ -127,20 +109,20 @@ async def agent_loop(query: str, history: list[dict] | None = None):
         try:
             iterations = 0
             chat = client.aio.chats.create(
-        model=settings.main_model, 
-        config={
-            'temperature': 1.0,
-            'system_instruction': build_system_instruction(),
-            'max_output_tokens': 16000,
-            'thinking_config': {
-                'thinking_level': 'high',
-                'include_thoughts': True,
-            },
-            'tools': [search_knowledge_base, web_search, calculator],
-            'automatic_function_calling': {'disable': True},
-            },
-        history=to_gemini_history(history),
-        )
+                model=settings.main_model,
+                config={
+                    'temperature': 1.0,
+                    'system_instruction': build_system_instruction(),
+                    'max_output_tokens': 16000,
+                    'thinking_config': {
+                        'thinking_level': 'high',
+                        'include_thoughts': True,
+                    },
+                    'tools': [search_knowledge_base, web_search, calculator],
+                    'automatic_function_calling': {'disable': True},
+                },
+                history=to_gemini_history(history),
+            )
             calls = []
             async for chunk in await chat.send_message_stream(query):
                 for part in chunk.parts or []:
@@ -213,11 +195,3 @@ async def agent_loop(query: str, history: list[dict] | None = None):
                 }
                 return
             await asyncio.sleep(min(BASE_DELAY * 2 ** attempt, MAX_DELAY))
-                
-
-async def main():
-    async for chunk in agent_loop('Привет! Какая погода в калифорнии?'):
-        print(chunk)
-
-if __name__=="__main__":
-    asyncio.run(main())

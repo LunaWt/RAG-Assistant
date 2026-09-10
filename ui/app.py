@@ -1,4 +1,5 @@
 import json
+import time
 
 import requests
 import streamlit as st
@@ -6,6 +7,14 @@ import streamlit as st
 from components import copy_button_html, search_card_html
 
 API = "http://127.0.0.1:8000"
+INDEXING_TIMEOUT = 900
+STAGE_TEXT = {
+    "queued": "В очереди…",
+    "parsing": "Читаю документ…",
+    "chunking": "Режу на чанки…",
+    "embedding": "Считаю эмбеддинги…",
+    "done": "Готово",
+}
 
 st.set_page_config(
     page_title="RAG Agent",
@@ -557,19 +566,35 @@ with st.sidebar:
     if uploaded and st.button("Index", use_container_width=True):
         progress = st.progress(0, text="Uploading…")
         try:
-            progress.progress(15, text="Uploading file…")
             r = requests.post(
                 f"{API}/upload-document",
                 files={"file": (uploaded.name, uploaded.getvalue(), uploaded.type)},
                 timeout=120,
             )
-            progress.progress(55, text="Parsing & chunking…")
             r.raise_for_status()
-            data = r.json()
-            progress.progress(90, text="Indexing in Chroma…")
-            progress.progress(100, text="Done")
-            st.success(data.get("message", "Document indexed"))
-            st.rerun()
+            job_id = r.json()["job_id"]
+
+            deadline = time.monotonic() + INDEXING_TIMEOUT
+            while time.monotonic() < deadline:
+                s = requests.get(f"{API}/jobs/{job_id}", timeout=10)
+                s.raise_for_status()
+                job = s.json()
+                progress.progress(
+                    job["progress"], text=STAGE_TEXT.get(job["stage"], job["stage"])
+                )
+                if job["status"] == "done":
+                    st.success(
+                        f"{job['filename']} проиндексирован ({job['chunks']} чанков)"
+                    )
+                    st.rerun()
+                if job["status"] == "error":
+                    progress.empty()
+                    st.error(job["error"] or "Indexing failed")
+                    break
+                time.sleep(0.5)
+            else:
+                progress.empty()
+                st.error("Indexing is taking too long — check the server log")
         except requests.RequestException as e:
             progress.empty()
             detail = ""

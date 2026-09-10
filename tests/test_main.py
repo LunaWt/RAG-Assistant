@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Any, NoReturn
 import asyncio
 import json
+import threading
+import time
 
 
 import chromadb
@@ -490,6 +492,21 @@ async def test_delete_unknown_document_keeps_other_files(
     assert fake_vector_db.list_sources() == ["other.pdf"]
 
 
+async def wait_for_job(
+    client: AsyncClient, job_id: str, timeout: float = 10.0
+) -> dict:
+    """Poll /jobs until it leaves pending/running — the client's half of the contract."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        resp = await client.get(f"/jobs/{job_id}")
+        assert resp.status_code == 200
+        body = resp.json()
+        if body["status"] in ("done", "error"):
+            return body
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"job {job_id} did not finish within {timeout}s")
+
+
 @pytest.mark.asyncio
 async def test_upload_document_saves_file_and_indexes_chunks(
     async_client: AsyncClient,
@@ -507,10 +524,15 @@ async def test_upload_document_saves_file_and_indexes_chunks(
         },
     )
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "success"
-    assert body["filename"] == "report.txt"
+    assert resp.status_code == 202
+    accepted = resp.json()
+    assert accepted["filename"] == "report.txt"
+    assert accepted["status"] == "pending"
+
+    body = await wait_for_job(async_client, accepted["job_id"])
+    assert body["status"] == "done"
+    assert body["progress"] == 100
+    assert body["error"] is None
     assert body["chunks"] == 1
 
     saved_file = storage_dir / "report.txt"
@@ -562,9 +584,96 @@ async def test_upload_document_fail(
         },
     )
 
-    assert resp.status_code == 500
-    assert resp.json()['detail'] == 'Ошибка сервера'
-    assert list(storage_dir.iterdir()) == []
+    assert resp.status_code == 202
+    body = await wait_for_job(async_client, resp.json()["job_id"])
+
+    assert body["status"] == "error"
+    assert body["error"] == "Ошибка сервера"
+    assert not (storage_dir / "test.md").exists()
+    assert list((storage_dir / main_module.STAGING_DIR).iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_name_uploads_do_not_share_bytes(
+    async_client: AsyncClient,
+    fake_vector_db: vector_db_module.VectorDB,
+    storage_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_extract_text = main_module.extract_text
+    parsed: list[str] = []
+    both_inside = threading.Barrier(2, timeout=10)
+
+    def extract_when_both_are_parsing(file_path: Path) -> str:
+        both_inside.wait()
+        text = real_extract_text(file_path)
+        parsed.append(text)
+        return text
+
+    monkeypatch.setattr(main_module, "extract_text", extract_when_both_are_parsing)
+
+    jobs_ids = []
+    for content in (b"alpha alpha", b"bravo bravo"):
+        resp = await async_client.post(
+            "/upload-document",
+            files={"file": ("doc.txt", content, "text/plain")},
+        )
+        assert resp.status_code == 202
+        jobs_ids.append(resp.json()["job_id"])
+
+    for job_id in jobs_ids:
+        assert (await wait_for_job(async_client, job_id))["status"] == "done"
+
+    assert sorted(parsed) == ["alpha alpha", "bravo bravo"]
+    assert fake_vector_db.list_sources() == ["doc.txt"]
+    # the job that won the lock must be the same one in Chroma and on disk
+    indexed = [chunk.strip() for chunk in fake_vector_db.preview_chunks("doc.txt")]
+    saved_text = (storage_dir / "doc.txt").read_text(encoding="utf-8")
+    assert saved_text in ("alpha alpha", "bravo bravo")
+    assert indexed == [saved_text]
+    assert list((storage_dir / main_module.STAGING_DIR).iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_upload_does_not_block_the_event_loop(
+    async_client: AsyncClient,
+    fake_vector_db: vector_db_module.VectorDB,
+    storage_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parsing = threading.Event()
+    release = threading.Event()
+
+    def blocking_extract_text(file_path: Path) -> str:
+        parsing.set()
+        # only the test releases this, and only after the POST has returned
+        if not release.wait(5):
+            raise RuntimeError("upload handler waited for the parser")
+        return "California weather report"
+
+    monkeypatch.setattr(main_module, "extract_text", blocking_extract_text)
+
+    resp = await async_client.post(
+        "/upload-document",
+        files={"file": ("slow.txt", b"payload", "text/plain")},
+    )
+    assert resp.status_code == 202
+    job_id = resp.json()["job_id"]
+
+    assert await asyncio.to_thread(parsing.wait, 10), "parser never started"
+    # the parser is inside a blocking call right now; on the event loop this would hang
+    sources = await asyncio.wait_for(async_client.get("/documents/sources"), timeout=2)
+    assert sources.status_code == 200
+
+    release.set()
+    assert (await wait_for_job(async_client, job_id))["status"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_job_status_unknown_id_returns_404(async_client: AsyncClient) -> None:
+    resp = await async_client.get("/jobs/does-not-exist")
+
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

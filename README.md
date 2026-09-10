@@ -32,7 +32,7 @@ Tools: vector_db (Chroma) | web_search (ddgs + trafilatura + summarisation) | ca
 ```
 
 - **Retrieval:** ChromaDB `PersistentClient`, `BAAI/bge-m3` embeddings (1024d, normalized,
-  so L2 ranking is equivalent to cosine). Chunking at 1000 characters with 50 overlap.
+  so L2 ranking is equivalent to cosine). Chunking at 3000 characters with 300 overlap.
 - **Parsing:** PDF, TXT/MD, DOCX, XLSX, PPTX; UTF-8 with a cp1251 fallback.
 - **Persistence:** async SQLAlchemy over SQLite, `sessions → messages → blocks` with
   cascade deletes. A reloaded conversation renders from the same block structure the
@@ -83,9 +83,15 @@ the chunker, and the tool loop ran 21 iterations against a limit of 20 (`<=` ins
 
 ## Status
 
-Portfolio v1, in progress: 3 of 14 planned milestones are closed (test foundation,
-API/persistence coverage, LLM client + agent hardening). Not built yet: authentication
-and per-user isolation, cross-encoder reranking, hybrid BM25 + vector retrieval, RAGAS
-evaluation, a sandboxed code-execution tool, Celery/Redis background indexing, and the
-Docker Compose deployment. Uploaded documents currently have no ownership boundary — this
-runs locally, single user, on purpose.
+Portfolio v1 is unfinished and currently intended for local, single-user use; documents
+have no ownership boundary. The active next deliverable is an OpenAI-compatible provider
+path, followed by usable UI/history restoration, a retrieval/answer-quality baseline and
+reproducible containers. Background indexing is planned with RabbitMQ, Redis and a worker;
+authentication, per-user isolation and deployment remain required work before public release.
+
+The test foundation and API coverage milestones have historical closure evidence; the chat
+lifecycle milestone still has obligations carried into provider/UI work. Existing tests are
+not a completed product or a retrieval-quality measurement. Reranking and hybrid retrieval
+are optional measured experiments after the baseline; sandboxed code execution is outside v1.
+Milestone requirements and the execution checkpoint are tracked locally and are not part of
+this repository.

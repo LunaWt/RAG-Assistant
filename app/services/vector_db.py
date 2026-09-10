@@ -1,9 +1,13 @@
+import logging
 import threading
+from typing import Callable
 
 import chromadb
 from app.config import settings
 from sentence_transformers import SentenceTransformer
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class VectorDB:
@@ -20,26 +24,37 @@ class VectorDB:
         if self._model is None:
             with self._model_lock:  # double-checked: only one thread loads
                 if self._model is None:
-                    self._model = SentenceTransformer(self.model_name)
+                    self._model = SentenceTransformer(
+                        self.model_name, device=settings.embedding_device
+                    )
         return self._model
 
     def warm_up(self) -> None:
         """Force model load + one encode off the request path (run in background)."""
         try:
             self.model.encode(["warm up"], normalize_embeddings=True)
-        except Exception as e:
-            print(f"⚠️ embedder warm-up failed (will lazy-load on first use): {e}")
+        except Exception:
+            logger.warning("Embedder warm-up failed; it will lazy-load on first use", exc_info=True)
 
     def add_document_to_db(
         self,
         chunks: list[str],
         filename: str,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> None:
 
         ids = [f"{filename}_chunk_{i}" for i in range(len(chunks))]
         new_ids = set(ids)
 
-        embeddings = self.model.encode(chunks, normalize_embeddings=True).tolist()
+        batch = max(1, settings.embedding_batch_size)
+        embeddings: list[list[float]] = []
+        for start in range(0, len(chunks), batch):
+            vectors = self.model.encode(
+                chunks[start : start + batch], normalize_embeddings=True
+            ).tolist()
+            embeddings.extend(vectors)
+            if on_progress:
+                on_progress(len(embeddings), len(chunks))
 
         metadatas = [{"source": filename} for _ in range(len(chunks))]
 
@@ -59,9 +74,9 @@ class VectorDB:
         stale_ids = [chunk_id for chunk_id in current_ids if chunk_id not in new_ids]
         if stale_ids:
             self.collection.delete(ids=stale_ids)
-            print(f"🗑️ Удалены устаревшие чанки: {stale_ids}")
+            logger.info("Removed %d stale chunks of %s", len(stale_ids), filename)
 
-        print(f"✅ В базу добавлено {len(chunks)} чанков из файла {filename}")
+        logger.info("Indexed %d chunks of %s", len(chunks), filename)
 
     def rag_search(self, query: str, filename: str = None) -> list[str]:
         query_vector = self.model.encode([query], normalize_embeddings=True).tolist()

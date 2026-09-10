@@ -4,6 +4,8 @@ import pandas as pd
 from pptx import Presentation
 from pathlib import Path
 
+SUPPORTED_SUFFIXES = frozenset({'.pdf', '.md', '.txt', '.docx', '.xlsx', '.pptx'})
+
 
 def _read_text_file(file_path: str) -> str:
     for encoding in ("utf-8", "utf-8-sig", "cp1251", "latin-1"):

@@ -1,5 +1,7 @@
 import asyncio
 import json
+import logging
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,8 +19,11 @@ from app.services.vector_db import vector_db
 from app.config import settings
 from app.services.agent import agent_loop
 from app.services.chunker import smart_chunk_text
-from app.services.llm_client import generate_response, generate_title
-from app.services.parser import extract_text
+from app.services.jobs import jobs
+from app.services.llm_client import generate_title
+from app.services.parser import SUPPORTED_SUFFIXES, extract_text
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -62,11 +67,6 @@ def normalize_filename(raw: str | None) -> str:
     if not raw:
         raise ValueError("Missing filename")
     return Path(unquote_plus(raw, encoding="utf-8", errors="replace")).name
-
-
-def build_prompt(query: str, retrieved_chunks: list[str]) -> str:
-    return f"""User: {query},
-            retrieved chunks: {"\n\n".join(retrieved_chunks)}"""
 
 
 @app.get("/documents")
@@ -118,50 +118,91 @@ def delete_document(filename: str):
     }
 
 
-@app.get("/ask")
-def ask_rag_bot(query: str, filename: str | None = None) -> StreamingResponse:
+STAGING_DIR = ".staging"
 
-    if filename:
-        retrieved_chunks = vector_db.rag_search(query, filename)
-    else:
-        retrieved_chunks = vector_db.rag_search(query)
-
-    prompt = build_prompt(query, retrieved_chunks)
-    return StreamingResponse(generate_response(prompt), media_type="text/plain")
+_name_locks: dict[str, threading.Lock] = {}
+_name_locks_guard = threading.Lock()
 
 
-@app.post("/upload-document")
+def name_lock(filename: str) -> threading.Lock:
+    """One lock per document name, so two uploads of the same name commit in turn."""
+    with _name_locks_guard:
+        return _name_locks.setdefault(filename, threading.Lock())
+
+
+def clear_staging(staged_path: Path) -> None:
+    try:
+        staged_path.unlink(missing_ok=True)
+        staged_path.parent.rmdir()
+    except OSError:
+        logger.warning("Could not clear staging directory %s", staged_path.parent)
+
+
+def index_document(staged_path: Path, filename: str, job_id: str) -> None:
+    """Parse, chunk and embed off the event loop, reporting progress into the job store."""
+    try:
+        jobs.update(job_id, status="running", stage="parsing")
+        text = extract_text(staged_path)
+        jobs.update(job_id, stage="chunking")
+        chunks = smart_chunk_text(text, settings.chunk_size, settings.overlap)
+        jobs.update(job_id, stage="embedding", total_chunks=len(chunks))
+        with name_lock(filename):
+            vector_db.add_document_to_db(
+                chunks,
+                filename,
+                on_progress=lambda done, total: jobs.update(
+                    job_id, done_chunks=done, total_chunks=total
+                ),
+            )
+            staged_path.replace(Path(settings.storage_dir) / filename)
+        jobs.update(job_id, status="done", stage="done", chunks=len(chunks))
+    except ValueError as e:
+        jobs.update(job_id, status="error", stage="failed", error=str(e))
+    except Exception:
+        logger.exception("Indexing failed for %s", filename)
+        jobs.update(job_id, status="error", stage="failed", error="Ошибка сервера")
+    finally:
+        clear_staging(staged_path)
+
+
+@app.post("/upload-document", status_code=202)
 async def upload_document(file: UploadFile = File()):
     try:
         filename = normalize_filename(file.filename)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
+    if Path(filename).suffix.lower() not in SUPPORTED_SUFFIXES:
+        raise HTTPException(status_code=422, detail="Unsupported file type")
+
     save_dir = Path(settings.storage_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
-    file_path = save_dir / filename
 
-    content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
-
+    job_id = jobs.create(filename)
+    staged_path = save_dir / STAGING_DIR / job_id / filename
     try:
-        text = extract_text(file_path)
-        chunks = smart_chunk_text(text, settings.chunk_size, settings.overlap)
-        vector_db.add_document_to_db(chunks, filename)
-    except ValueError as e:
-        file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    except Exception as e:
-        file_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail='Ошибка сервера') from e
+        staged_path.parent.mkdir(parents=True, exist_ok=True)
+        content = await file.read()
+        await asyncio.to_thread(staged_path.write_bytes, content)
+    except OSError as e:
+        jobs.update(job_id, status="error", stage="failed", error="Ошибка сервера")
+        raise HTTPException(status_code=500, detail="Ошибка сервера") from e
 
-    return {
-        "status": "success",
-        "filename": filename,
-        "chunks": len(chunks),
-        "message": f"Файл {filename} успешно загружен и проиндексирован ({len(chunks)} чанков)",
-    }
+    task = asyncio.create_task(
+        asyncio.to_thread(index_document, staged_path, filename, job_id)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return {"job_id": job_id, "filename": filename, "status": "pending"}
+
+
+@app.get("/jobs/{job_id}")
+def get_job_status(job_id: str):
+    job = jobs.snapshot(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    return job
 
 
 @app.post("/sessions")

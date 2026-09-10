@@ -3,7 +3,17 @@ from google.genai import types
 
 from app.config import settings
 
-client = genai.Client(api_key=settings.gemini_api_key)
+http_options = None
+if settings.gemini_proxy_url:
+    http_options = types.HttpOptions(
+        client_args={'proxy': settings.gemini_proxy_url},
+        async_client_args={'proxy': settings.gemini_proxy_url},
+    )
+
+client = genai.Client(
+    api_key=settings.gemini_api_key,
+    http_options=http_options,
+)
 
 async def generate_response(prompt: str):
     responses = await client.aio.models.generate_content_stream(
