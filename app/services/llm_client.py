@@ -16,6 +16,7 @@ TITLE_PROMPT = (
 
 
 def build_client() -> AsyncOpenAI:
+    """Build a configured OpenAI-compatible client without SDK-level retries."""
     # A dropped SYN costs the OS SYN-retry budget, ~21 s on Windows, before the socket gives
     # up; measured 2026-09-11, 4 of 8 connections to openrouter.ai from this machine die that
     # way. A short connect deadline hands the failure to agent_loop's retry, while the read
@@ -39,13 +40,14 @@ client = build_client()
 
 
 def first_text(response) -> str:
-    """Text of the first choice, or '' — a refusal or a truncated turn leaves it empty."""
+    """Return the first choice's text, or an empty string when none is available."""
     if not response.choices:
         return ''
     return response.choices[0].message.content or ''
 
 
 async def generate_title(query: str) -> str:
+    """Generate a chat title and strip surrounding whitespace and double quotes."""
     response = await client.chat.completions.create(
         model=settings.summary_model,
         messages=[
@@ -59,6 +61,7 @@ async def generate_title(query: str) -> str:
 
 
 async def generate_summary(content: str) -> str:
+    """Summarize content with the configured summary model."""
     response = await client.chat.completions.create(
         model=settings.summary_model,
         messages=[

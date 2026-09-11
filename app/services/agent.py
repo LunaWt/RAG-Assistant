@@ -109,9 +109,11 @@ class Turn:
     calls: dict[int, ToolCall] = field(default_factory=dict)
 
     def ordered(self) -> list[ToolCall]:
+        """Return tool calls in their provider-assigned index order."""
         return [self.calls[index] for index in sorted(self.calls)]
 
     def as_message(self) -> dict:
+        """Serialize this turn as an OpenAI-compatible assistant message."""
         message: dict = {"role": "assistant", "content": self.text or None}
         calls = self.ordered()
         if calls:
@@ -132,6 +134,11 @@ def tool_message(call: ToolCall, result) -> dict:
 
 
 async def run_tool(call: ToolCall) -> tuple[dict, list[dict]]:
+    """Execute a requested tool and return its protocol reply and search hits.
+
+    Invalid calls and tool failures are returned as tool replies so the model can
+    recover from them.
+    """
     args = call.args
     if args is None:
         return tool_message(
@@ -196,6 +203,7 @@ def to_messages(history: list[dict] | None) -> list[dict]:
 
 
 def is_retryable(e: Exception) -> bool:
+    """Return whether an exception represents a transient model API failure."""
     if isinstance(e, APIStatusError):
         return e.status_code in RETRYABLE_API_CODES
     return isinstance(e, (APIConnectionError, TimeoutError))
@@ -247,8 +255,10 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
 
 
 async def agent_loop(query: str, history: list[dict] | None = None):
-    """
-    Agent loop for the application.
+    """Stream UI events for a model response and any requested tool rounds.
+
+    Retryable provider failures restart the response from the original conversation;
+    terminal failures are emitted as error events.
     """
     for attempt in range(RETRIES):
         try:

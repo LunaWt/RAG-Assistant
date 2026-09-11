@@ -139,10 +139,10 @@ def clear_staging(staged_path: Path) -> None:
 
 
 def index_document(staged_path: Path, filename: str, job_id: str) -> None:
-    """Parse, chunk and embed off the event loop, reporting progress into the job store.
+    """Index a staged document and report progress through the job store.
 
-    The terminal status is published last, after the staging directory is gone: a client
-    that polls until done or error has to be able to trust that nothing is still moving.
+    On success, the staged file is moved into document storage. The terminal job status
+    is published only after staging cleanup has been attempted.
     """
     result: dict
     try:
