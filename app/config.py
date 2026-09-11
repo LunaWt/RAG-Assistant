@@ -5,11 +5,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf_8')
 
     ## LLM
-    gemini_api_key: str
-    gemini_proxy_url: str | None = None
+    llm_api_key: str
+    llm_base_url: str = 'https://openrouter.ai/api/v1'
+    llm_proxy_url: str | None = None
+    llm_timeout: float = 120.0
+    llm_connect_timeout: float = 5.0
     hf_token: str
-    main_model: str = 'gemma-4-26b-a4b-it'
-    summary_model: str = 'gemini-3.1-flash-lite'
+    main_model: str = 'openrouter/free'
+    summary_model: str = 'inclusionai/ling-3.0-flash-fin:free'
     
     ## PROMPTS
     main_agent_prompt: str = """

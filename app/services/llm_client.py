@@ -1,71 +1,71 @@
-from google import genai
-from google.genai import types
+import httpx2
+from openai import AsyncOpenAI
 
 from app.config import settings
 
-http_options = None
-if settings.gemini_proxy_url:
-    http_options = types.HttpOptions(
-        client_args={'proxy': settings.gemini_proxy_url},
-        async_client_args={'proxy': settings.gemini_proxy_url},
-    )
+# A reasoning model spends this budget before emitting any content, so a tight cap returns
+# finish_reason="length" and an empty title. Measured 2026-09-11 on openai/gpt-oss-20b:
+# 64 tokens gave '', 512 gave the title.
+TITLE_MAX_TOKENS = 512
 
-client = genai.Client(
-    api_key=settings.gemini_api_key,
-    http_options=http_options,
+TITLE_PROMPT = (
+    "Generate a short chat title from the user's first message: "
+    "3-5 words, same language as the message, "
+    "no quotes and no trailing punctuation."
 )
 
-async def generate_response(prompt: str):
-    responses = await client.aio.models.generate_content_stream(
-        model=settings.main_model,
-        contents=prompt,
-        config={
-            'temperature': 1.0,
-            'system_instruction': settings.rag_prompt,
-            'max_output_tokens': 6000,
-            'thinking_config': {
-                'thinking_level': 'high',
-                'include_thoughts': False
-            },
-        }
-    )
-    async for chunk in responses:
-        if chunk.text:
-            yield chunk.text
+
+def build_client() -> AsyncOpenAI:
+    # A dropped SYN costs the OS SYN-retry budget, ~21 s on Windows, before the socket gives
+    # up; measured 2026-09-11, 4 of 8 connections to openrouter.ai from this machine die that
+    # way. A short connect deadline hands the failure to agent_loop's retry, while the read
+    # deadline stays long enough for a slow model.
+    timeout = httpx2.Timeout(settings.llm_timeout, connect=settings.llm_connect_timeout)
+    kwargs = {
+        'api_key': settings.llm_api_key,
+        'base_url': settings.llm_base_url,
+        'timeout': timeout,
+        # agent_loop owns retries; the SDK's own default of 2 would multiply them.
+        'max_retries': 0,
+    }
+    if settings.llm_proxy_url:
+        kwargs['http_client'] = httpx2.AsyncClient(
+            proxy=settings.llm_proxy_url, timeout=timeout
+        )
+    return AsyncOpenAI(**kwargs)
+
+
+client = build_client()
+
+
+def first_text(response) -> str:
+    """Text of the first choice, or '' — a refusal or a truncated turn leaves it empty."""
+    if not response.choices:
+        return ''
+    return response.choices[0].message.content or ''
 
 
 async def generate_title(query: str) -> str:
-    response = await client.aio.models.generate_content(
+    response = await client.chat.completions.create(
         model=settings.summary_model,
-        contents=query,
-        config={
-            'temperature': 0.3,
-            'automatic_function_calling': {'disable': True},
-            'system_instruction': (
-                "Generate a short chat title from the user's first message: "
-                "3-5 words, same language as the message, "
-                "no quotes and no trailing punctuation."
-            ),
-            'max_output_tokens': 64,
-            'thinking_config': {'thinking_budget': 0},
-        }
+        messages=[
+            {'role': 'system', 'content': TITLE_PROMPT},
+            {'role': 'user', 'content': query},
+        ],
+        temperature=0.3,
+        max_tokens=TITLE_MAX_TOKENS,
     )
-    return (response.text or "").strip().strip('"')
+    return first_text(response).strip().strip('"')
 
 
 async def generate_summary(content: str) -> str:
-    response = await client.aio.models.generate_content(
+    response = await client.chat.completions.create(
         model=settings.summary_model,
-        contents=content,
-        config={
-            'temperature': 1.0,
-            'automatic_function_calling': {'disable': True},
-            'system_instruction': settings.summary_prompt,
-            'max_output_tokens': 16000,
-            'thinking_config': {
-                'thinking_level': 'high',
-                'include_thoughts': False
-            }
-        }
+        messages=[
+            {'role': 'system', 'content': settings.summary_prompt},
+            {'role': 'user', 'content': content},
+        ],
+        temperature=1.0,
+        max_tokens=16000,
     )
-    return response.text
+    return first_text(response)
