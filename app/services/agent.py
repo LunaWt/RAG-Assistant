@@ -132,6 +132,11 @@ def tool_message(call: ToolCall, result) -> dict:
 
 
 async def run_tool(call: ToolCall) -> tuple[dict, list[dict]]:
+    """Run one tool call, returning its protocol reply and any retrieval hits.
+
+    Every failure becomes a tool reply instead of an exception: the model needs the error
+    text to correct itself, and the protocol needs an answer for every call id.
+    """
     args = call.args
     if args is None:
         return tool_message(
@@ -247,8 +252,10 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
 
 
 async def agent_loop(query: str, history: list[dict] | None = None):
-    """
-    Agent loop for the application.
+    """Stream one answer as UI events, running tool rounds until the model stops asking.
+
+    `messages` is rebuilt on every attempt because the loop appends to it as it goes: a
+    retry has to resend the original conversation, not the half-built one.
     """
     for attempt in range(RETRIES):
         try:

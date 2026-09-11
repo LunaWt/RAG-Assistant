@@ -1,4 +1,9 @@
+from urllib.parse import urlparse
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+LOOPBACK_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
 
 
 class Settings(BaseSettings):
@@ -48,6 +53,17 @@ class Settings(BaseSettings):
 
     ## STORAGE
     storage_dir: str = 'app/storage'
+
+    @field_validator('llm_base_url')
+    @classmethod
+    def require_encrypted_transport(cls, url: str) -> str:
+        # LLM_API_KEY travels in the Authorization header of every request, so a plain http
+        # URL sends the key in the clear. A redirect to https does not save it: the header
+        # is already on the wire. Loopback stays allowed for a local Ollama or vLLM.
+        parsed = urlparse(url)
+        if parsed.scheme != 'https' and parsed.hostname not in LOOPBACK_HOSTS:
+            raise ValueError(f'LLM_BASE_URL must use https (got {parsed.scheme or url!r})')
+        return url
 
 
 settings = Settings()

@@ -76,7 +76,7 @@ The first request downloads `bge-m3` (~2 GB) from Hugging Face.
 
 ```sh
 pip install -r requirements-dev.txt
-python -m pytest -q           # 104 passed
+python -m pytest -q           # 107 passed
 ```
 
 No test touches the network, the real Chroma store or a real model: `tests/fakes.py` holds
