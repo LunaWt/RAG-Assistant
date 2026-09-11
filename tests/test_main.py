@@ -585,12 +585,15 @@ async def test_upload_document_fail(
     )
 
     assert resp.status_code == 202
-    body = await wait_for_job(async_client, resp.json()["job_id"])
+    job_id = resp.json()["job_id"]
+    body = await wait_for_job(async_client, job_id)
 
     assert body["status"] == "error"
     assert body["error"] == "Ошибка сервера"
     assert not (storage_dir / "test.md").exists()
-    assert list((storage_dir / main_module.STAGING_DIR).iterdir()) == []
+    # This job's own directory, not the whole staging root: another test's worker thread
+    # may still be finishing, and its leftover is not this test's business.
+    assert not (storage_dir / main_module.STAGING_DIR / job_id).exists()
 
 
 @pytest.mark.asyncio
@@ -631,7 +634,8 @@ async def test_concurrent_same_name_uploads_do_not_share_bytes(
     saved_text = (storage_dir / "doc.txt").read_text(encoding="utf-8")
     assert saved_text in ("alpha alpha", "bravo bravo")
     assert indexed == [saved_text]
-    assert list((storage_dir / main_module.STAGING_DIR).iterdir()) == []
+    staging = storage_dir / main_module.STAGING_DIR
+    assert [job_id for job_id in jobs_ids if (staging / job_id).exists()] == []
 
 
 @pytest.mark.asyncio

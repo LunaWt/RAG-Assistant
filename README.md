@@ -25,8 +25,8 @@ FastAPI (app/main.py)
     ▼
 agent_loop (app/services/agent.py)
     │  system prompt + the list of indexed documents
-    │  chats.create(history=…) — native model turns, not text injection
-    │  send_message_stream(query) ↔ Gemini, tool calls executed manually
+    │  messages[] ↔ any OpenAI-compatible /chat/completions endpoint
+    │  streamed tool-call fragments rejoined by index, tools executed manually
     ▼
 Tools: vector_db (Chroma) | web_search (ddgs + trafilatura + summarisation) | calculator
 ```
@@ -45,8 +45,12 @@ Tools: vector_db (Chroma) | web_search (ddgs + trafilatura + summarisation) | ca
 - **Own ReAct loop instead of a framework.** A framework would hide exactly the parts that
   break in production: retry classification, the iteration limit, what happens to a partial
   answer when the model 503s mid-stream.
+- **The provider is a base URL, not a vendor.** One adapter over the OpenAI wire protocol,
+  so swapping the Hugging Face router for OpenRouter or Gemini's compatibility endpoint is
+  two lines of `.env`. Reasoning text is outside that protocol, so it is read defensively
+  from `reasoning_content`/`reasoning` and simply absent on providers that do not send it.
 - **Retries are classified, not blanket.** Only `{408, 429, 500, 502, 503, 504}` plus
-  `httpx.TransportError`/`TimeoutError` are retried, with backoff
+  `openai.APIConnectionError`/`TimeoutError` are retried, with backoff
   `min(1.0 · 2ⁿ, 8.0)`. A programming error returns immediately instead of being retried
   ten times behind a spinner.
 - **The answer survives a closed tab.** The stream runs as a background task feeding a
@@ -56,9 +60,11 @@ Tools: vector_db (Chroma) | web_search (ddgs + trafilatura + summarisation) | ca
 
 ## Run
 
+Python 3.10 or newer (`openai` requires it, and the code uses `X | None` annotations).
+
 ```sh
 pip install -r requirements.txt
-cp .env.example .env          # fill GEMINI_API_KEY and HF_TOKEN
+cp .env.example .env          # fill LLM_API_KEY and HF_TOKEN
 
 uvicorn app.main:app --reload # API on :8000
 cd ui && streamlit run app.py # UI on :8501
@@ -70,7 +76,7 @@ The first request downloads `bge-m3` (~2 GB) from Hugging Face.
 
 ```sh
 pip install -r requirements-dev.txt
-python -m pytest -q           # 97 passed
+python -m pytest -q           # 107 passed
 ```
 
 No test touches the network, the real Chroma store or a real model: `tests/fakes.py` holds
@@ -84,10 +90,10 @@ the chunker, and the tool loop ran 21 iterations against a limit of 20 (`<=` ins
 ## Status
 
 Portfolio v1 is unfinished and currently intended for local, single-user use; documents
-have no ownership boundary. The active next deliverable is an OpenAI-compatible provider
-path, followed by usable UI/history restoration, a retrieval/answer-quality baseline and
-reproducible containers. Background indexing is planned with RabbitMQ, Redis and a worker;
-authentication, per-user isolation and deployment remain required work before public release.
+have no ownership boundary. The active next deliverable is a usable UI with history
+restoration, followed by a retrieval/answer-quality baseline and reproducible containers.
+Background indexing is planned with RabbitMQ, Redis and a worker; authentication, per-user
+isolation and deployment remain required work before public release.
 
 The test foundation and API coverage milestones have historical closure evidence; the chat
 lifecycle milestone still has obligations carried into provider/UI work. Existing tests are

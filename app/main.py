@@ -139,7 +139,12 @@ def clear_staging(staged_path: Path) -> None:
 
 
 def index_document(staged_path: Path, filename: str, job_id: str) -> None:
-    """Parse, chunk and embed off the event loop, reporting progress into the job store."""
+    """Parse, chunk and embed off the event loop, reporting progress into the job store.
+
+    The terminal status is published last, after the staging directory is gone: a client
+    that polls until done or error has to be able to trust that nothing is still moving.
+    """
+    result: dict
     try:
         jobs.update(job_id, status="running", stage="parsing")
         text = extract_text(staged_path)
@@ -155,14 +160,16 @@ def index_document(staged_path: Path, filename: str, job_id: str) -> None:
                 ),
             )
             staged_path.replace(Path(settings.storage_dir) / filename)
-        jobs.update(job_id, status="done", stage="done", chunks=len(chunks))
+        result = {"status": "done", "stage": "done", "chunks": len(chunks)}
     except ValueError as e:
-        jobs.update(job_id, status="error", stage="failed", error=str(e))
+        result = {"status": "error", "stage": "failed", "error": str(e)}
     except Exception:
         logger.exception("Indexing failed for %s", filename)
-        jobs.update(job_id, status="error", stage="failed", error="Ошибка сервера")
-    finally:
+        result = {"status": "error", "stage": "failed", "error": "Ошибка сервера"}
+    try:
         clear_staging(staged_path)
+    finally:
+        jobs.update(job_id, **result)
 
 
 @app.post("/upload-document", status_code=202)
