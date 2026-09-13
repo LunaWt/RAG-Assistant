@@ -43,6 +43,21 @@ class Settings(BaseSettings):
         Keep it concise but ensure no critical facts or numbers are omitted. 
         Format: coherent paragraph(s)."""
     
+    ## VISION
+    # Measured 2026-09-13 on one table page: gemma-4-31b, gemma-4-26b-a4b and ling-3.0-flash-vl
+    # all returned 429 "temporarily rate-limited upstream" from the shared free pool on the
+    # first attempt; nex-n2.5-pro answered and reproduced every table cell. The free tier is
+    # a shared pool, so the page loop needs a fallback model, not only a retry.
+    vision_model: str = 'nex-agi/nex-n2.5-pro:free'
+    # 150 dpi is the usual OCR floor; below it small type breaks, above it the base64 payload
+    # grows ~4/3 of an already quadratic pixel count for no accuracy gain.
+    vision_dpi: int = 150
+    vision_max_tokens: int = 8000
+    vision_prompt: str = """Transcribe this page into Markdown.
+        Reproduce the text exactly, in reading order. Use Markdown headings for headings and
+        Markdown tables for tables, preserving every cell. Do not summarise, explain, translate
+        or add commentary. Output the page content only."""
+
     ## RAG
     chunk_size: int = 3000
     overlap: int = 300
