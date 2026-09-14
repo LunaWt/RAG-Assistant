@@ -33,7 +33,11 @@ Tools: vector_db (Chroma) | web_search (ddgs + trafilatura + summarisation) | ca
 
 - **Retrieval:** ChromaDB `PersistentClient`, `BAAI/bge-m3` embeddings (1024d, normalized,
   so L2 ranking is equivalent to cosine). Chunking at 3000 characters with 300 overlap.
-- **Parsing:** PDF, TXT/MD, DOCX, XLSX, PPTX; UTF-8 with a cp1251 fallback.
+- **Parsing:** TXT/MD, DOCX, XLSX, PPTX read their own text, UTF-8 with a cp1251 fallback.
+  **PDF is different: every page is rendered to PNG at 150 dpi and transcribed to Markdown by
+  a vision model**, ten pages per request. Text-layer extraction was dropped because it
+  succeeds on table pages while getting them wrong — flattened rows, reversed rotated labels —
+  and a caller cannot tell that from a successful return.
 - **Persistence:** async SQLAlchemy over SQLite, `sessions → messages → blocks` with
   cascade deletes. A reloaded conversation renders from the same block structure the
   stream produced.
@@ -64,7 +68,7 @@ Python 3.10 or newer (`openai` requires it, and the code uses `X | None` annotat
 
 ```sh
 pip install -r requirements.txt
-cp .env.example .env          # fill LLM_API_KEY and HF_TOKEN
+cp .env.example .env          # fill LLM_API_KEY, HF_TOKEN, and VISION_API_KEY for PDF
 
 uvicorn app.main:app --reload # API on :8000
 cd ui && streamlit run app.py # UI on :8501

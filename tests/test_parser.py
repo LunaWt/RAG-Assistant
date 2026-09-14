@@ -40,43 +40,28 @@ def test_extract_text_rejects_empty_text_file(tmp_path: Path) -> None:
         extract_text(str(file_path))
 
 
-def test_extract_text_reads_pdf_pages(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakePage:
-        def __init__(self, text: str | None) -> None:
-            self.text = text
+def test_extract_text_pdf_goes_through_vision(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
 
-        def extract_text(self) -> str | None:
-            return self.text
+    def fake_pdf_to_markdown(path: str, on_progress=None) -> str:
+        seen["path"] = path
+        return "# Heading\n\n| a | b |\n| - | - |"
 
-    class FakePdf:
-        pages = [FakePage("First page"), FakePage(None), FakePage("Second page")]
+    monkeypatch.setattr(parser_module.vision, "pdf_to_markdown", fake_pdf_to_markdown)
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> None:
-            return None
-
-    monkeypatch.setattr(parser_module.pdfplumber, "open", lambda _: FakePdf())
-
-    assert extract_text("document.pdf") == "First page\nSecond page"
+    assert extract_text("document.pdf") == "# Heading\n\n| a | b |\n| - | - |"
+    assert seen["path"] == "document.pdf"
 
 
-def test_extract_text_rejects_pdf_without_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakePage:
-        def extract_text(self) -> None:
-            return None
+def test_extract_text_pdf_has_no_silent_text_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed transcription must fail the upload, not quietly index flattened text."""
 
-    class FakePdf:
-        pages = [FakePage()]
+    def fake_pdf_to_markdown(path: str, on_progress=None) -> str:
+        raise ValueError("No text extracted")
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> None:
-            return None
-
-    monkeypatch.setattr(parser_module.pdfplumber, "open", lambda _: FakePdf())
+    monkeypatch.setattr(parser_module.vision, "pdf_to_markdown", fake_pdf_to_markdown)
 
     with pytest.raises(ValueError, match="No text extracted"):
         extract_text("document.pdf")

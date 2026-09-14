@@ -147,7 +147,12 @@ def index_document(staged_path: Path, filename: str, job_id: str) -> None:
     result: dict
     try:
         jobs.update(job_id, status="running", stage="parsing")
-        text = extract_text(staged_path)
+        text = extract_text(
+            staged_path,
+            on_progress=lambda done, total: jobs.update(
+                job_id, done_pages=done, total_pages=total
+            ),
+        )
         jobs.update(job_id, stage="chunking")
         chunks = smart_chunk_text(text, settings.chunk_size, settings.overlap)
         jobs.update(job_id, stage="embedding", total_chunks=len(chunks))

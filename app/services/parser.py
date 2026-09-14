@@ -1,8 +1,9 @@
-import pdfplumber
 import docx
 import pandas as pd
 from pptx import Presentation
 from pathlib import Path
+
+from app.services import vision
 
 SUPPORTED_SUFFIXES = frozenset({'.pdf', '.md', '.txt', '.docx', '.xlsx', '.pptx'})
 
@@ -19,18 +20,18 @@ def _read_text_file(file_path: str) -> str:
     raise ValueError("No text extracted")
 
 
-def extract_text(file_path: str) -> str:
-    
+def extract_text(file_path: str, on_progress=None) -> str:
+
     suffix = Path(file_path).suffix
 
+    # Every PDF goes through vision, not only the ones pdfplumber cannot read. Measured
+    # 2026-09-14 on page 10 of a 49-page arXiv paper: pdfplumber returned non-empty text for
+    # that page, so a fallback-on-empty trigger would never have fired, and the text it
+    # returned had the table rows flattened and the rotated axis labels reversed (") ( ssoL").
+    # Extraction succeeding is not extraction being right.
     if suffix == '.pdf':
-        with pdfplumber.open(file_path) as pdf:
-            pages_text = [text for page in pdf.pages if (text := page.extract_text())]
-            if pages_text:
-                return '\n'.join(pages_text)
-            else:
-                raise ValueError('No text extracted')
-    
+        return vision.pdf_to_markdown(str(file_path), on_progress)
+
     elif suffix in ('.md', '.txt'):
         return _read_text_file(file_path)
 

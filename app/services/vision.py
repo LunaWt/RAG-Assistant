@@ -1,10 +1,66 @@
+import asyncio
 import base64
 import io
 
+import httpx2
 import pypdfium2
+from openai import AsyncOpenAI
 
 from app.config import settings
-from app.services.llm_client import client, first_text
+
+
+class PageCountMismatch(RuntimeError):
+    """The model returned a different number of pages than the batch contained."""
+
+
+class BatchTruncated(ValueError):
+    """The model hit its output cap before finishing the batch.
+
+    A ValueError because a truncated *single* page is a genuine parse failure that the upload
+    path already knows how to report. A truncated multi-page batch is not: it means the batch
+    asked for more Markdown than the output budget allows, and splitting it fixes that.
+    """
+
+
+def build_client() -> AsyncOpenAI:
+    """A client for one document.
+
+    Deliberately not a module-level singleton. Parsing runs in a worker thread and drives the
+    async calls with asyncio.run(), which creates and then closes a fresh event loop per
+    document. An httpx connection pool built under the first loop is unusable under the
+    second, and the failure surfaces as APIConnectionError on the *second* upload, not the
+    first — measured 2026-09-14, call 1 fine, call 2 dead.
+    """
+    timeout = httpx2.Timeout(settings.vision_timeout, connect=settings.llm_connect_timeout)
+    # Only reuse the chat key when both point at the same provider. Falling back
+    # unconditionally would post the OpenRouter key to Google on any machine that set up chat
+    # but not vision, and a leaked credential does not announce itself.
+    api_key = settings.vision_api_key
+    if not api_key and settings.vision_base_url == settings.llm_base_url:
+        api_key = settings.llm_api_key
+    if not api_key:
+        raise ValueError(
+            'VISION_API_KEY is required to parse PDFs when VISION_BASE_URL differs from '
+            'LLM_BASE_URL'
+        )
+    kwargs = {
+        'api_key': api_key,
+        'base_url': settings.vision_base_url,
+        'timeout': timeout,
+        'max_retries': 0,
+    }
+    proxy = settings.vision_proxy_url or settings.llm_proxy_url
+    if proxy:
+        kwargs['http_client'] = httpx2.AsyncClient(proxy=proxy, timeout=timeout)
+    return AsyncOpenAI(**kwargs)
+
+
+def page_count(pdf_path: str) -> int:
+    pdf = pypdfium2.PdfDocument(pdf_path)
+    try:
+        return len(pdf)
+    finally:
+        pdf.close()
 
 
 def render_page(pdf_path: str, page_number: int, dpi: int | None = None) -> bytes:
@@ -19,35 +75,93 @@ def render_page(pdf_path: str, page_number: int, dpi: int | None = None) -> byte
     return buffer.getvalue()
 
 
-def page_count(pdf_path: str) -> int:
-    pdf = pypdfium2.PdfDocument(pdf_path)
-    try:
-        return len(pdf)
-    finally:
-        pdf.close()
+def _image_part(png: bytes) -> dict:
+    return {
+        'type': 'image_url',
+        'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(png).decode()},
+    }
 
 
-async def page_to_markdown(png: bytes, model: str | None = None) -> str:
-    data_url = 'data:image/png;base64,' + base64.b64encode(png).decode()
+def _split_pages(text: str) -> list[str]:
+    parts = text.split(settings.vision_page_separator)
+    if parts and not parts[0].strip():
+        parts = parts[1:]
+    return [part.strip() for part in parts]
+
+
+async def _transcribe(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]:
+    prompt = settings.vision_prompt.replace(
+        '{separator}', settings.vision_page_separator
+    )
     response = await client.chat.completions.create(
-        model=model or settings.vision_model,
+        model=settings.vision_model,
         messages=[
             {
                 'role': 'user',
                 'content': [
-                    {'type': 'text', 'text': settings.vision_prompt},
-                    {'type': 'image_url', 'image_url': {'url': data_url}},
+                    {'type': 'text', 'text': prompt},
+                    *(_image_part(png) for png in pngs),
                 ],
             }
         ],
         temperature=0.0,
         max_tokens=settings.vision_max_tokens,
     )
-    # Truncation is the silent failure here: a page cut off at max_tokens returns valid-looking
+    if not response.choices:
+        raise ValueError('Vision model returned no choices')
+    choice = response.choices[0]
+    # Truncation is the silent failure here: a batch cut off at max_tokens returns valid-looking
     # Markdown that is simply missing its tail, and nothing downstream can tell.
-    if response.choices and response.choices[0].finish_reason == 'length':
-        raise ValueError('Vision model hit the output limit; page transcript is incomplete')
-    text = first_text(response).strip()
-    if not text:
-        raise ValueError('Vision model returned no text')
+    if choice.finish_reason == 'length':
+        raise BatchTruncated(
+            'Vision model hit the output limit; page transcript is incomplete'
+        )
+    pages = _split_pages(choice.message.content or '')
+    # The other silent failure: the model transcribes six of ten pages, emits six separators and
+    # still finishes with "stop". Without this check the document loses four pages and no error
+    # ever reaches the job store.
+    if len(pages) != len(pngs):
+        raise PageCountMismatch(f'sent {len(pngs)} pages, got {len(pages)} back')
+    return pages
+
+
+async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]:
+    try:
+        return await _transcribe(client, pngs)
+    except (PageCountMismatch, BatchTruncated):
+        if len(pngs) == 1:
+            raise
+    return [page for png in pngs for page in await _transcribe(client, [png])]
+
+
+def pdf_to_markdown(pdf_path: str, on_progress=None) -> str:
+    total = page_count(pdf_path)
+    if not total:
+        raise ValueError('No text extracted')
+    # ValueError on purpose: index_document turns it into a job error carrying this message,
+    # so the user is told the page count rather than seeing a generic server failure.
+    if total > settings.vision_max_pages:
+        raise ValueError(
+            f'PDF has {total} pages; the limit is {settings.vision_max_pages}'
+        )
+    if on_progress:
+        on_progress(0, total)
+
+    async def run() -> list[str]:
+        client = build_client()
+        try:
+            transcripts: list[str] = []
+            for start in range(0, total, settings.vision_batch_pages):
+                batch = range(start, min(start + settings.vision_batch_pages, total))
+                pngs = [render_page(pdf_path, number) for number in batch]
+                transcripts.extend(await pages_to_markdown(client, pngs))
+                if on_progress:
+                    on_progress(len(transcripts), total)
+            return transcripts
+        finally:
+            await client.close()
+
+    text = '\n\n'.join(page for page in asyncio.run(run()) if page)
+    if not text.strip():
+        raise ValueError('No text extracted')
     return text

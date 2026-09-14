@@ -3,8 +3,10 @@ import time
 import uuid
 from dataclasses import dataclass
 
-PARSING_PERCENT = 5
-CHUNKING_PERCENT = 10
+# Parsing owns a real span now: vision transcription runs one model call per batch of pages,
+# so on a long PDF it is the slowest stage, not the instant one it was when pdfplumber did it.
+PARSING_PERCENT = 40
+CHUNKING_PERCENT = 45
 
 
 @dataclass
@@ -13,6 +15,8 @@ class Job:
     filename: str
     status: str = "pending"
     stage: str = "queued"
+    done_pages: int = 0
+    total_pages: int = 0
     done_chunks: int = 0
     total_chunks: int = 0
     chunks: int = 0
@@ -24,7 +28,9 @@ def _percent(job: Job) -> int:
     if job.status == "done":
         return 100
     if job.stage == "parsing":
-        return PARSING_PERCENT
+        if not job.total_pages:
+            return 0
+        return int(PARSING_PERCENT * job.done_pages / job.total_pages)
     if job.stage == "chunking":
         return CHUNKING_PERCENT
     if job.stage == "embedding" and job.total_chunks:
@@ -68,6 +74,7 @@ class JobStore:
                 "status": job.status,
                 "stage": job.stage,
                 "progress": _percent(job),
+                "pages": job.total_pages,
                 "chunks": job.chunks,
                 "error": job.error,
             }

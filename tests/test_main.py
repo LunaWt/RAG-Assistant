@@ -607,7 +607,7 @@ async def test_concurrent_same_name_uploads_do_not_share_bytes(
     parsed: list[str] = []
     both_inside = threading.Barrier(2, timeout=10)
 
-    def extract_when_both_are_parsing(file_path: Path) -> str:
+    def extract_when_both_are_parsing(file_path: Path, on_progress=None) -> str:
         both_inside.wait()
         text = real_extract_text(file_path)
         parsed.append(text)
@@ -648,7 +648,7 @@ async def test_upload_does_not_block_the_event_loop(
     parsing = threading.Event()
     release = threading.Event()
 
-    def blocking_extract_text(file_path: Path) -> str:
+    def blocking_extract_text(file_path: Path, on_progress=None) -> str:
         parsing.set()
         # only the test releases this, and only after the POST has returned
         if not release.wait(5):
