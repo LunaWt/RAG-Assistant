@@ -32,9 +32,19 @@ class BatchTruncated(ValueError):
     """
 
 
+class EmptyResponse(RuntimeError):
+    """A 200 with no choices in it. Seen as a provider hiccup, not as a bad page."""
+
+
 # Retried, because they clear on their own: the free tier answers 429 on burst and Google
 # returns 500 INTERNAL under load.
-TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
+TRANSIENT_ERRORS = (
+    APIConnectionError,
+    APITimeoutError,
+    EmptyResponse,
+    InternalServerError,
+    RateLimitError,
+)
 # What "this page did not come back" means for the caller that has to choose between a marker
 # and a failed upload. The two batch errors join the list only because on a *single* page they
 # are no longer splittable: one page of Markdown that will not fit the output cap, or a model
@@ -132,7 +142,7 @@ async def _transcribe(client: AsyncOpenAI, pngs: list[bytes], model: str) -> lis
         max_tokens=settings.vision_max_tokens,
     )
     if not response.choices:
-        raise ValueError('Vision model returned no choices')
+        raise EmptyResponse('Vision model returned no choices')
     choice = response.choices[0]
     # Truncation is the silent failure here: a batch cut off at max_tokens returns valid-looking
     # Markdown that is simply missing its tail, and nothing downstream can tell.

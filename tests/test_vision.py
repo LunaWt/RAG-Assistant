@@ -335,3 +335,16 @@ async def test_a_busy_primary_and_a_missing_fallback_stay_a_page_failure(
     with pytest.raises(APIConnectionError):
         await vision.pages_to_markdown(client, [b"a"])
     assert client.models == ["primary", "primary", "fallback"]
+
+
+@pytest.mark.asyncio
+async def test_an_empty_response_is_a_page_failure_not_a_document_failure() -> None:
+    """A 200 carrying no choices used to raise a bare ValueError, outside PAGE_FAILURES.
+
+    It killed the upload instead of the page, which is the opposite of how a provider hiccup
+    should end. CodeRabbit found this on PR #3.
+    """
+    client = FakeVisionClient(SimpleNamespace(choices=[]), response(f"{SEP}\none"))
+
+    assert await vision.pages_to_markdown(client, [b"a"]) == ["one"]
+    assert issubclass(vision.EmptyResponse, tuple(vision.PAGE_FAILURES))
