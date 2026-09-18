@@ -114,7 +114,7 @@ def delete_document(filename: str):
         "status": "success",
         "filename": name,
         "chunks_removed": removed,
-        "message": f"Удалён {name} ({removed} чанков)",
+        "message": f"Deleted {name} ({removed} chunks)",
     }
 
 
@@ -152,6 +152,9 @@ def index_document(staged_path: Path, filename: str, job_id: str) -> None:
             on_progress=lambda done, total: jobs.update(
                 job_id, done_pages=done, total_pages=total
             ),
+            on_page_failed=lambda number, count: jobs.update(
+                job_id, failed_pages=count
+            ),
         )
         jobs.update(job_id, stage="chunking")
         chunks = smart_chunk_text(text, settings.chunk_size, settings.overlap)
@@ -170,7 +173,7 @@ def index_document(staged_path: Path, filename: str, job_id: str) -> None:
         result = {"status": "error", "stage": "failed", "error": str(e)}
     except Exception:
         logger.exception("Indexing failed for %s", filename)
-        result = {"status": "error", "stage": "failed", "error": "Ошибка сервера"}
+        result = {"status": "error", "stage": "failed", "error": "Server error"}
     try:
         clear_staging(staged_path)
     finally:
@@ -197,8 +200,8 @@ async def upload_document(file: UploadFile = File()):
         content = await file.read()
         await asyncio.to_thread(staged_path.write_bytes, content)
     except OSError as e:
-        jobs.update(job_id, status="error", stage="failed", error="Ошибка сервера")
-        raise HTTPException(status_code=500, detail="Ошибка сервера") from e
+        jobs.update(job_id, status="error", stage="failed", error="Server error")
+        raise HTTPException(status_code=500, detail="Server error") from e
 
     task = asyncio.create_task(
         asyncio.to_thread(index_document, staged_path, filename, job_id)

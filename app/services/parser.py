@@ -20,7 +20,7 @@ def _read_text_file(file_path: str) -> str:
     raise ValueError("No text extracted")
 
 
-def extract_text(file_path: str, on_progress=None) -> str:
+def extract_text(file_path: str, on_progress=None, on_page_failed=None) -> str:
 
     suffix = Path(file_path).suffix
 
@@ -30,7 +30,7 @@ def extract_text(file_path: str, on_progress=None) -> str:
     # returned had the table rows flattened and the rotated axis labels reversed (") ( ssoL").
     # Extraction succeeding is not extraction being right.
     if suffix == '.pdf':
-        return vision.pdf_to_markdown(str(file_path), on_progress)
+        return vision.pdf_to_markdown(str(file_path), on_progress, on_page_failed)
 
     elif suffix in ('.md', '.txt'):
         return _read_text_file(file_path)

@@ -40,21 +40,21 @@ def calculator(expression: str):
     Result is rounded to 4 decimal places."""
     
     if not isinstance(expression, str):
-        return 'Выражение должно быть строкой'
+        return 'Expression must be a string'
     if len(expression) > 100:
-        return "Слишком большое выражение"
+        return "Expression is too long"
     try:
         return round(
                 number=simple_eval(expr=expression),
                 ndigits=4)
     except (NameNotDefined, FunctionNotDefined) as e:
-        return f'Использование запрещенных переменных или функций {e}'
+        return f'Forbidden variables or functions: {e}'
     except InvalidExpression as e:
-        return f'Ошибка в выражении: {e}'
+        return f'Error in expression: {e}'
     except SyntaxError:
-        return 'Синтаксическая ошибка в выражении'
+        return 'Syntax error in expression'
     except Exception as e:
-        return f'Ошибка{e}'
+        return f'Error: {e}'
 
 
 def _ddg_search(query: str) -> list[dict]:

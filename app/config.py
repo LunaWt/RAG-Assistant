@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from pydantic import PositiveInt, ValidationInfo, field_validator
+from pydantic import Field, PositiveInt, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LOOPBACK_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # is ~24 000 tokens, more than a whole minute's allowance, capping it near 6.6 pages/min
     # against 102 for flash-lite.
     vision_model: str = 'gemini-3.5-flash-lite'
+    # The fallback is the previous Flash-Lite generation on the same key: identical limits
+    # (1 048 576 in / 65 536 out), image input, same free tier, so nothing else in this file has
+    # to change when it is used. Both ids came back from the live model list on 2026-09-18.
+    # It covers a model-level failure - 500 INTERNAL, a retired id, a per-model quota - and
+    # nothing account-level: a spent daily quota or the region block kills both. The list also
+    # offers 'gemini-flash-lite-latest', deliberately not used, because an alias that floats can
+    # silently become the primary and the fallback at once.
+    vision_fallback_model: str = 'gemini-3.1-flash-lite'
     # 150 dpi is the usual OCR floor; below it small type breaks, above it the base64 payload
     # grows ~4/3 of an already quadratic pixel count for no accuracy gain.
     vision_dpi: int = 150
@@ -72,6 +80,18 @@ class Settings(BaseSettings):
     # upload. Luna's number, 14 Sep 2026: high enough that no real document hits it.
     vision_max_pages: PositiveInt = 2000
     vision_max_tokens: int = 32000
+    # Attempts are per model: a page gets this many tries on the primary and the same number on
+    # the fallback before it counts as failed.
+    vision_attempts: PositiveInt = 3
+    vision_retry_backoff: float = 2.0
+    # A 429 asking for an hour means the daily quota is gone, and waiting it out inside an
+    # upload helps nobody. The wait is capped and the page is allowed to fail instead.
+    vision_retry_max_sleep: float = 30.0
+    # A page that fails on both models becomes a marker in the text and the document still
+    # indexes. This ceiling is what stops that from turning a dead key into 200 markers: above
+    # this share of failed pages the upload errors out. At 0.1 a one-page PDF whose only page
+    # failed is also rejected, which is the behaviour you want there.
+    vision_max_failed_fraction: float = Field(default=0.1, ge=0.0, le=1.0)
     vision_page_separator: str = '---PAGE---'
     # {separator} is substituted with vision_page_separator before the call. Hardcoding the
     # marker here instead would let an override of one setting desynchronise it from the

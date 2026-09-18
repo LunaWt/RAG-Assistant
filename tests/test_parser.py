@@ -43,7 +43,7 @@ def test_extract_text_rejects_empty_text_file(tmp_path: Path) -> None:
 def test_extract_text_pdf_goes_through_vision(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
-    def fake_pdf_to_markdown(path: str, on_progress=None) -> str:
+    def fake_pdf_to_markdown(path: str, on_progress=None, on_page_failed=None) -> str:
         seen["path"] = path
         return "# Heading\n\n| a | b |\n| - | - |"
 
@@ -58,7 +58,7 @@ def test_extract_text_pdf_has_no_silent_text_fallback(
 ) -> None:
     """A failed transcription must fail the upload, not quietly index flattened text."""
 
-    def fake_pdf_to_markdown(path: str, on_progress=None) -> str:
+    def fake_pdf_to_markdown(path: str, on_progress=None, on_page_failed=None) -> str:
         raise ValueError("No text extracted")
 
     monkeypatch.setattr(parser_module.vision, "pdf_to_markdown", fake_pdf_to_markdown)

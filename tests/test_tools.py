@@ -23,12 +23,12 @@ def test_calculator_valid_expressions(expression, expected):
 @pytest.mark.parametrize(
     "expression, expected_prefix",
     [
-        ("0" * 101, "Слишком большое выражение"),
-        ("1 +", "Синтаксическая ошибка в выражении"),
-        ("foo(2)", "Использование запрещенных переменных или функций"),
-        ("x + 1", "Использование запрещенных переменных или функций"),
-        (1, "Выражение должно быть строкой"),
-        ("2 ** 2000", "Ошибка в выражении"),
+        ("0" * 101, "Expression is too long"),
+        ("1 +", "Syntax error in expression"),
+        ("foo(2)", "Forbidden variables or functions"),
+        ("x + 1", "Forbidden variables or functions"),
+        (1, "Expression must be a string"),
+        ("2 ** 2000", "Error in expression"),
     ],
 )
 def test_calculator_error_messages(expression, expected_prefix):

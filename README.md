@@ -37,7 +37,10 @@ Tools: vector_db (Chroma) | web_search (ddgs + trafilatura + summarisation) | ca
   **PDF is different: every page is rendered to PNG at 150 dpi and transcribed to Markdown by
   a vision model**, ten pages per request. Text-layer extraction was dropped because it
   succeeds on table pages while getting them wrong — flattened rows, reversed rotated labels —
-  and a caller cannot tell that from a successful return.
+  and a caller cannot tell that from a successful return. A batch that fails is retried page by
+  page, a page is retried on a second Flash-Lite generation, and a page that still fails is
+  replaced by `[page N could not be transcribed]` so the gap is visible in retrieval instead of
+  silent. Above 10% of pages lost the upload fails instead of indexing the remains.
 - **Persistence:** async SQLAlchemy over SQLite, `sessions → messages → blocks` with
   cascade deletes. A reloaded conversation renders from the same block structure the
   stream produced.

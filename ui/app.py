@@ -9,11 +9,11 @@ from components import copy_button_html, search_card_html
 API = "http://127.0.0.1:8000"
 INDEXING_TIMEOUT = 900
 STAGE_TEXT = {
-    "queued": "В очереди…",
-    "parsing": "Читаю документ…",
-    "chunking": "Режу на чанки…",
-    "embedding": "Считаю эмбеддинги…",
-    "done": "Готово",
+    "queued": "Queued…",
+    "parsing": "Reading the document…",
+    "chunking": "Splitting into chunks…",
+    "embedding": "Computing embeddings…",
+    "done": "Done",
 }
 
 st.set_page_config(
@@ -559,6 +559,14 @@ with st.sidebar:
 
     st.divider()
     st.header("Knowledge base")
+    # The notice outlives st.rerun(), which discards anything written before it. A lost page is
+    # the one upload result the user must not miss, so it cannot live in that window.
+    notice = st.session_state.pop("upload_notice", None)
+    if notice:
+        st.success(notice["text"])
+        if notice["warning"]:
+            st.warning(notice["warning"])
+
     uploaded = st.file_uploader(
         "Upload document",
         type=["pdf", "txt", "md", "docx", "xlsx", "pptx"],
@@ -583,9 +591,16 @@ with st.sidebar:
                     job["progress"], text=STAGE_TEXT.get(job["stage"], job["stage"])
                 )
                 if job["status"] == "done":
-                    st.success(
-                        f"{job['filename']} проиндексирован ({job['chunks']} чанков)"
-                    )
+                    failed = job.get("failed_pages") or 0
+                    st.session_state["upload_notice"] = {
+                        "text": f"{job['filename']} indexed ({job['chunks']} chunks)",
+                        "warning": (
+                            f"{failed} page(s) could not be transcribed; they are marked "
+                            "in the indexed text"
+                        )
+                        if failed
+                        else None,
+                    }
                     st.rerun()
                 if job["status"] == "error":
                     progress.empty()
@@ -683,13 +698,13 @@ if prompt := st.chat_input("Ask anything…"):
                     if t == "stream_reset":
                         blocks.clear()
                         stream_box.empty()  # hard-clear partial render before retry
-                        status_box.caption("Соединение оборвалось, повторяем…")
+                        status_box.caption("The connection dropped, retrying…")
                         continue
 
                     if t == "error":
                         blocks.clear()
                         stream_box.empty()
-                        status_box.error(ev.get("message", "Ошибка агента"))
+                        status_box.error(ev.get("message", "Agent error"))
                         break
 
                     if t == "done":
@@ -711,13 +726,13 @@ if prompt := st.chat_input("Ask anything…"):
             elif not completed:
                 stream_box.empty()
                 status_box.warning(
-                    "Ответ не завершён — сообщение не сохранено. Попробуйте ещё раз."
+                    "The answer did not finish — the message was not saved. Try again."
                 )
 
         except requests.exceptions.ChunkedEncodingError:
             stream_box.empty()
             status_box.warning(
-                "Соединение оборвалось — незавершённый ответ не сохранён."
+                "The connection dropped — the unfinished answer was not saved."
             )
         except requests.RequestException as e:
             stream_box.empty()
