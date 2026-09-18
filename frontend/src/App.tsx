@@ -96,7 +96,8 @@ export function App() {
           return;
         }
         if (event.type === 'done') {
-          setMessages((previous) => [...previous, { role: 'assistant', blocks }]);
+          const finished = applyEvent(blocks, event);
+          setMessages((previous) => [...previous, { role: 'assistant', blocks: finished }]);
           return;
         }
         blocks = event.type === 'stream_reset' ? [] : applyEvent(blocks, event);
@@ -145,7 +146,8 @@ export function App() {
           placeholder="Ask anything…"
           onChange={(change) => setDraft(change.target.value)}
           onKeyDown={(key) => {
-            if (key.key === 'Enter' && !key.shiftKey) {
+            // isComposing: an IME is mid-word, so Enter is picking a candidate, not sending.
+            if (key.key === 'Enter' && !key.shiftKey && !key.nativeEvent.isComposing) {
               key.preventDefault();
               void send();
             }
