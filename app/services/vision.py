@@ -1,12 +1,22 @@
 import asyncio
 import base64
 import io
+import logging
 
 import httpx2
 import pypdfium2
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    NotFoundError,
+    RateLimitError,
+)
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class PageCountMismatch(RuntimeError):
@@ -20,6 +30,20 @@ class BatchTruncated(ValueError):
     path already knows how to report. A truncated multi-page batch is not: it means the batch
     asked for more Markdown than the output budget allows, and splitting it fixes that.
     """
+
+
+# Retried, because they clear on their own: the free tier answers 429 on burst and Google
+# returns 500 INTERNAL under load.
+TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError)
+# What "this page did not come back" means for the caller that has to choose between a marker
+# and a failed upload. The two batch errors join the list only because on a *single* page they
+# are no longer splittable: one page of Markdown that will not fit the output cap, or a model
+# answering with a page count it was not sent.
+PAGE_FAILURES = (*TRANSIENT_ERRORS, PageCountMismatch, BatchTruncated)
+# Not retried on the same model and not a page failure either: a model id that no longer
+# resolves is the case the fallback exists for. Google retires ids (gemini-3.1-flash-lite-preview
+# went on 2026-05-25) and a config can outlive one.
+MODEL_GONE = (NotFoundError,)
 
 
 def build_client() -> AsyncOpenAI:
@@ -89,12 +113,12 @@ def _split_pages(text: str) -> list[str]:
     return [part.strip() for part in parts]
 
 
-async def _transcribe(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]:
+async def _transcribe(client: AsyncOpenAI, pngs: list[bytes], model: str) -> list[str]:
     prompt = settings.vision_prompt.replace(
         '{separator}', settings.vision_page_separator
     )
     response = await client.chat.completions.create(
-        model=settings.vision_model,
+        model=model,
         messages=[
             {
                 'role': 'user',
@@ -125,16 +149,101 @@ async def _transcribe(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]:
     return pages
 
 
+def _retry_delay(error: Exception, attempt: int) -> float:
+    """Exponential backoff, overridden by the server's own Retry-After when it sends one."""
+    headers = getattr(getattr(error, 'response', None), 'headers', None)
+    requested = None
+    if headers is not None:
+        try:
+            requested = float(headers.get('retry-after') or '')
+        except (AttributeError, TypeError, ValueError):
+            requested = None
+    if requested is None:
+        requested = settings.vision_retry_backoff * 2**attempt
+    return min(requested, settings.vision_retry_max_sleep)
+
+
+def _models() -> list[str]:
+    fallback = settings.vision_fallback_model
+    if fallback and fallback != settings.vision_model:
+        return [settings.vision_model, fallback]
+    return [settings.vision_model]
+
+
 async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]:
-    try:
-        return await _transcribe(client, pngs)
-    except (PageCountMismatch, BatchTruncated):
-        if len(pngs) == 1:
-            raise
-    return [page for png in pngs for page in await _transcribe(client, [png])]
+    """One batch of page images, retried on the primary model and then on the fallback.
+
+    Only transient errors are retried. A truncated batch or a page-count mismatch is not
+    transient — the same images and the same prompt produce it again — so it leaves here
+    immediately for the caller to split into single pages.
+    """
+    transient: Exception | None = None
+    gone: Exception = RuntimeError('no vision model configured')
+    for model in _models():
+        for attempt in range(settings.vision_attempts):
+            try:
+                return await _transcribe(client, pngs, model)
+            except MODEL_GONE as error:
+                gone = error
+                logger.warning('Vision model %s does not resolve: %s', model, error)
+                break
+            except TRANSIENT_ERRORS as error:
+                transient = error
+                logger.warning(
+                    'Vision request failed (%s, attempt %d/%d, %d pages): %s',
+                    model, attempt + 1, settings.vision_attempts, len(pngs), error,
+                )
+                if attempt + 1 < settings.vision_attempts:
+                    await asyncio.sleep(_retry_delay(error, attempt))
+    if transient is not None:
+        # One model missing and the other merely busy is still a page problem, so the transient
+        # error wins: it is in PAGE_FAILURES, so the caller can isolate the page and carry on.
+        raise transient
+    # Every model 404s. Not a marker in the text: every page will fail the same way, and the
+    # operator needs to read the model name rather than a count of unreadable pages. ValueError,
+    # so index_document reports this sentence instead of a generic server error.
+    raise ValueError(
+        f'No configured vision model is available ({", ".join(_models())}): {gone}'
+    ) from gone
 
 
-def pdf_to_markdown(pdf_path: str, on_progress=None) -> str:
+def _placeholder(number: int) -> str:
+    # The marker is indexed with the rest of the document on purpose: a gap that retrieval can
+    # surface beats a document that quietly lost a page. Fixed wording, so it cannot be
+    # mistaken for the document's own text.
+    return f'[page {number} could not be transcribed]'
+
+
+async def _transcribe_batch(
+    client: AsyncOpenAI, pngs: list[bytes], first_number: int, note_failed
+) -> list[str]:
+    """A batch, degraded to one call per page as soon as the batch as a whole fails.
+
+    Splitting fixes three different failures: a batch whose Markdown overflows the output cap,
+    a model that answers with fewer pages than it was sent, and one unreadable page taking nine
+    readable ones down with it. What survives the split becomes a marker.
+    """
+    if len(pngs) > 1:
+        try:
+            return await pages_to_markdown(client, pngs)
+        except PAGE_FAILURES:
+            logger.warning(
+                'Vision batch of %d pages starting at %d failed; retrying page by page',
+                len(pngs), first_number,
+            )
+    transcripts: list[str] = []
+    for offset, png in enumerate(pngs):
+        number = first_number + offset
+        try:
+            transcripts.extend(await pages_to_markdown(client, [png]))
+        except PAGE_FAILURES:
+            logger.exception('Vision could not transcribe page %d', number)
+            transcripts.append(_placeholder(number))
+            note_failed(number)
+    return transcripts
+
+
+def pdf_to_markdown(pdf_path: str, on_progress=None, on_page_failed=None) -> str:
     total = page_count(pdf_path)
     if not total:
         raise ValueError('No text extracted')
@@ -149,12 +258,29 @@ def pdf_to_markdown(pdf_path: str, on_progress=None) -> str:
 
     async def run() -> list[str]:
         client = build_client()
+        failed: list[int] = []
+
+        def note_failed(number: int) -> None:
+            failed.append(number)
+            if on_page_failed:
+                on_page_failed(number, len(failed))
+            # The ceiling is what separates a scanned page the model choked on from a spent
+            # quota. Without it a key that died at page 3 of 200 indexes 197 markers and calls
+            # the upload a success.
+            if len(failed) > total * settings.vision_max_failed_fraction:
+                raise ValueError(
+                    f'Vision could not transcribe {len(failed)} of {total} pages '
+                    f'({", ".join(str(n) for n in failed)}); the document was not indexed'
+                )
+
         try:
             transcripts: list[str] = []
             for start in range(0, total, settings.vision_batch_pages):
                 batch = range(start, min(start + settings.vision_batch_pages, total))
                 pngs = [render_page(pdf_path, number) for number in batch]
-                transcripts.extend(await pages_to_markdown(client, pngs))
+                transcripts.extend(
+                    await _transcribe_batch(client, pngs, start + 1, note_failed)
+                )
                 if on_progress:
                     on_progress(len(transcripts), total)
             return transcripts

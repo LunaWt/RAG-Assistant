@@ -17,6 +17,7 @@ class Job:
     stage: str = "queued"
     done_pages: int = 0
     total_pages: int = 0
+    failed_pages: int = 0
     done_chunks: int = 0
     total_chunks: int = 0
     chunks: int = 0
@@ -75,6 +76,7 @@ class JobStore:
                 "stage": job.stage,
                 "progress": _percent(job),
                 "pages": job.total_pages,
+                "failed_pages": job.failed_pages,
                 "chunks": job.chunks,
                 "error": job.error,
             }
