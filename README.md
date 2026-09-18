@@ -79,11 +79,22 @@ cd ui && streamlit run app.py # UI on :8501
 
 The first request downloads `bge-m3` (~2 GB) from Hugging Face.
 
+The React frontend that will replace Streamlit lives in `frontend/` and currently covers the
+chat timeline and streamed answers; uploads, the document list and saved sessions are still
+Streamlit-only.
+
+```sh
+cd frontend
+npm install
+npm run dev                   # UI on :5173, forwarding /api to the API on :8000
+```
+
 ## Tests
 
 ```sh
 pip install -r requirements-dev.txt
-python -m pytest -q           # 107 passed
+python -m pytest -q           # 127 passed
+cd frontend && npm test       # 12 passed: block assembly and NDJSON framing
 ```
 
 No test touches the network, the real Chroma store or a real model: `tests/fakes.py` holds
