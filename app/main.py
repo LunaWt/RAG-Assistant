@@ -290,7 +290,7 @@ async def delete_chat_session(session_id: int, db: AsyncSession = Depends(get_db
 
 
 def apply_event_to_blocks(blocks: list[dict], event: dict) -> None:
-    """Server-side mirror of UI timeline: glue deltas, keep tool hits as JSON."""
+    """Server-side mirror of UI timeline: glue deltas, keep each tool round as JSON."""
     t = event["type"]
     if t == "thought_delta":
         if blocks and blocks[-1]["type"] == "thought":
@@ -302,11 +302,21 @@ def apply_event_to_blocks(blocks: list[dict], event: dict) -> None:
             blocks[-1]["content"] += event["text"]
         else:
             blocks.append({"type": "answer", "content": event["text"]})
+    elif t == "tool_start":
+        blocks.append(_tool_block(event["name"], event["args"]))
     elif t == "tool_hits":
-        content = json.dumps(
-            {"query": event["query"], "hits": event["hits"]}, ensure_ascii=False
-        )
-        blocks.append({"type": "tool", "content": content})
+        # Hits follow their round's tool_start directly. An orphan gets a nameless block,
+        # because raising here would kill the producer and lose the whole answer.
+        if not blocks or blocks[-1]["type"] != "tool":
+            blocks.append(_tool_block([], []))
+        data = json.loads(blocks[-1]["content"])
+        data["results"].append({"query": event["query"], "hits": event["hits"]})
+        blocks[-1]["content"] = json.dumps(data, ensure_ascii=False)
+
+
+def _tool_block(names: list[str], args: list[dict]) -> dict:
+    data = {"names": names, "args": args, "results": []}
+    return {"type": "tool", "content": json.dumps(data, ensure_ascii=False)}
 
 
 async def load_history(session_id: int) -> list[dict] | None:

@@ -739,6 +739,12 @@ async def test_chat_persists_assembled_blocks_after_done(
     events = [
             {'type': 'thought_delta', 'text': 'Looking'},
             {'type': 'thought_delta', 'text': ' into db'},
+            {'type': 'tool_start', 'name': ['calculator'], 'args': [{'expression': '2 + 2'}]},
+            {
+                'type': 'tool_start',
+                'name': ['web_search'],
+                'args': [{'query': 'California check'}],
+            },
             {
                 'type': 'tool_hits', 
                 'query': 'California check', 
@@ -780,7 +786,6 @@ async def test_chat_persists_assembled_blocks_after_done(
     messages = messages_response.json()['messages']
     user_message_blocks = messages[-2]['blocks']
     assistant_message_blocks = messages[-1]['blocks']
-    tool_content = json.dumps({"query": "California check", "hits": [{"title": "California weather", "href": "https://weather.com"}]}, ensure_ascii=False)
 
     assert messages_response.status_code == 200
     assert len(messages) == 4
@@ -794,8 +799,23 @@ async def test_chat_persists_assembled_blocks_after_done(
             'type': 'thought', 'content': 'Looking into db'
         },
         {
-        "type": "tool",
-        "content": tool_content,
+            'type': 'tool',
+            'content': json.dumps({
+                'names': ['calculator'],
+                'args': [{'expression': '2 + 2'}],
+                'results': [],
+            }),
+        },
+        {
+            'type': 'tool',
+            'content': json.dumps({
+                'names': ['web_search'],
+                'args': [{'query': 'California check'}],
+                'results': [{
+                    'query': 'California check',
+                    'hits': [{'title': 'California weather', 'href': 'https://weather.com'}],
+                }],
+            }),
         },
         {
             'type': 'answer', 'content': 'The weather in california is sunny.'
