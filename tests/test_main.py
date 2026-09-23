@@ -742,8 +742,8 @@ async def test_chat_persists_assembled_blocks_after_done(
             {'type': 'tool_start', 'name': ['calculator'], 'args': [{'expression': '2 + 2'}]},
             {
                 'type': 'tool_start',
-                'name': ['web_search'],
-                'args': [{'query': 'California check'}],
+                'name': ['web_search', 'web_search'],
+                'args': [{'query': 'California check'}, {'query': 'Nevada check'}],
             },
             {
                 'type': 'tool_hits', 
@@ -754,6 +754,11 @@ async def test_chat_persists_assembled_blocks_after_done(
                         'href': 'https://weather.com',
                     }
                 ]
+            },
+            {
+                'type': 'tool_hits',
+                'query': 'Nevada check',
+                'hits': [{'title': 'Nevada weather', 'href': 'https://weather.com/nv'}],
             },
             {'type': 'text_delta', 'text': 'The weather in california'},
             {'type': 'text_delta', 'text': ' is sunny.'},
@@ -809,12 +814,18 @@ async def test_chat_persists_assembled_blocks_after_done(
         {
             'type': 'tool',
             'content': json.dumps({
-                'names': ['web_search'],
-                'args': [{'query': 'California check'}],
-                'results': [{
-                    'query': 'California check',
-                    'hits': [{'title': 'California weather', 'href': 'https://weather.com'}],
-                }],
+                'names': ['web_search', 'web_search'],
+                'args': [{'query': 'California check'}, {'query': 'Nevada check'}],
+                'results': [
+                    {
+                        'query': 'California check',
+                        'hits': [{'title': 'California weather', 'href': 'https://weather.com'}],
+                    },
+                    {
+                        'query': 'Nevada check',
+                        'hits': [{'title': 'Nevada weather', 'href': 'https://weather.com/nv'}],
+                    },
+                ],
             }),
         },
         {
