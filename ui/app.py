@@ -288,7 +288,7 @@ def server_message_to_ui(m: dict) -> dict:
             ui_blocks.append({"type": "answer", "text": b["content"]})
         elif b["type"] == "tool":
             data = json.loads(b["content"])
-            ui_blocks.append({"type": "tool", "query": data["query"], "hits": data["hits"]})
+            ui_blocks.append({"type": "tool_spinner", "done": True, **data})
     return {"role": "assistant", "blocks": ui_blocks}
 
 
@@ -415,8 +415,6 @@ def _render_process_block(b: dict) -> None:
             _render_tool_detail(name, args)
         for res in b.get("results", []):
             st.markdown(search_card_html(res["query"], res["hits"]), unsafe_allow_html=True)
-    elif b["type"] == "tool":  # from loaded history
-        st.markdown(search_card_html(b["query"], b["hits"]), unsafe_allow_html=True)
 
 
 def _live_activity_label(blocks: list[dict]) -> str:
@@ -432,7 +430,7 @@ def _live_activity_label(blocks: list[dict]) -> str:
 
 def render_blocks(blocks: list[dict], *, streaming: bool = False) -> None:
     """Thoughts + tools tucked into one Reasoning panel; answer as plain text."""
-    process = [b for b in blocks if b["type"] in ("thought", "tool_spinner", "tool")]
+    process = [b for b in blocks if b["type"] in ("thought", "tool_spinner")]
     answers = [b for b in blocks if b["type"] == "answer"]
 
     if streaming and not answers:
@@ -461,8 +459,8 @@ def message_copy_text(message: dict) -> str:
     for b in message.get("blocks", []):
         if b["type"] == "thought" and b.get("text"):
             parts.append(f"[Reasoning]\n{b['text']}")
-        elif b["type"] == "tool":
-            parts.append(f"[Search: {b.get('query', '')}]")
+        elif b["type"] == "tool_spinner":
+            parts.extend(f"[Search: {r['query']}]" for r in b.get("results", []))
         elif b["type"] == "answer" and b.get("text"):
             parts.append(b["text"])
     return "\n\n".join(parts).strip()
