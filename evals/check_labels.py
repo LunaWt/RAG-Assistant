@@ -17,12 +17,13 @@ def quote_error(quote: str, doc: str, docs: dict[str, str], chunks: list[tuple[s
     norm = normalize(quote)
     if not MIN_QUOTE <= len(norm) <= MAX_QUOTE:
         return f"quote is {len(norm)} chars, keep it {MIN_QUOTE}-{MAX_QUOTE}"
-    occurrences = docs[doc].count(norm)
-    if occurrences == 0:
+    first = docs[doc].find(norm)
+    if first == -1:
         return f"not found in {doc}.md"
-    # A phrase that recurs makes every chunk repeating it count as a hit.
-    if occurrences > 1:
-        return f"too generic, {occurrences} times in {doc}.md"
+    # A phrase that recurs makes every chunk repeating it count as a hit. Searching from
+    # first + 1 also catches a repeat that overlaps the first match, which str.count skips.
+    if docs[doc].find(norm, first + 1) != -1:
+        return f"too generic, more than once in {doc}.md"
     if not any(d == doc and norm in text for d, text in chunks):
         return "split across a chunk boundary"
     return None
