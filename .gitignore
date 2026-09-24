@@ -42,3 +42,6 @@ logs/
 # Parked / scratch
 old_code.py
 *.parked
+
+# Evaluation corpus: PDFs, their vision transcripts and chunks (licences forbid redistribution)
+evals/corpus/

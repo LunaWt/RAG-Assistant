@@ -1,0 +1,144 @@
+[[question]]
+id = "q01"
+split = "dev"
+text = "how did hysparse 2 do on long-context benchmarks compared to the other architectures?"
+answer = "Key points: (1) after pretraining it has the best long-context scores of the three (RULER 90.77, NoLiMa 49.76), +5.88 and +9.49 over HySparse; (2) after light post-training it leads on retrieval, mean MRCR-v2 +11.30 and RULER-v2 +19.81 points over HySparse (e.g. 58.45 vs 32.61/35.74 on RULER-v2 at 256k). Compared against HySparse and Hybrid SWA."
+
+[[question.evidence]]
+doc = "hysparse2"
+quotes = ['''| NoLiMa | 30.13 | 40.27 | **49.76** |''', '''| RULER | 88.71 | 84.89 | **90.77** |''', '''the highest RULER and NoLiMa scores, improving over HySparse by 5.88 and 9.49 points''']
+
+[[question.evidence]]
+doc = "hysparse2"
+quotes = ['''improves mean MRCR-v2 and RULER-v2 scores over HySparse by 11.30 and 19.81 percentage points''', '''its mean MRCR-v2 and RULER-v2 scores increase by 11.30 and 19.81 points''', '''HySparse2 reaches 58.45 on RULER-v2, compared with 32.61 for HySparse and 35.74 for Hybrid SWA''']
+
+[[question]]
+id = "q02"
+split = "dev"
+text = "как ухудшится performance модели на инференсе, если ей выключить натренированный engram модуль, и как это соотносится с baseline моделью без engram?"
+answer = "Key points: (1) with the module switched off, factual-knowledge tasks collapse to about 29-44% of the full Engram model's own score (TriviaQA 29%); (2) reading comprehension barely suffers, keeping about 81-93% (C3 93%); (3) against the baseline without Engram (MoE-27B, same parameters and FLOPs), the full Engram-27B is better, e.g. MMLU +3.0, BBH +5.0, HumanEval +3.0. The paper never scores the switched-off model against MoE-27B, so a good answer says the drop is only reported relative to Engram itself."
+
+[[question.evidence]]
+doc = "engram"
+quotes = ['''retaining only 29–44% of the original performance''', '''TriviaQA-ZH (44%), PopQA (44%), TriviaQA (29%)''', '''Factual knowledge relies heavily on''']
+
+[[question.evidence]]
+doc = "engram"
+quotes = ['''retaining 81–93% (e.g., C3 at 93%)''', '''C3 (93%), RACE-Middle (89%), RACE-High (84%)''', '''reading comprehension is largely preserved by the backbone''']
+
+[[question.evidence]]
+doc = "engram"
+quotes = ['''Engram-27B consistently improves over the iso-parameter and iso-FLOPs MoE-27B baseline''', '''MMLU: +3.0, MMLU-Pro: +1.8, CMMLU: +4.0''']
+
+[[question]]
+id = "q03"
+split = "dev"
+text = "why does kimi linear still keep some regular attention layers instead of going fully linear, and how many does it keep?"
+answer = "Key points: (1) pure linear attention is weak at long-context retrieval, so a few full (global MLA) layers are kept to preserve global information flow; (2) the mix is 3 KDA layers per 1 full MLA layer (3:1), which was the best ratio in their ablation. Tempting confusion: HySparse2 also keeps a few full-attention layers, but for a different design (indexing for sparse layers)."
+
+[[question.evidence]]
+doc = "kimi_linear"
+quotes = ['''Long-context retrieval remains the primary bottleneck for pure linear attention''', '''preserving global information flow via the full attention layers''']
+
+[[question.evidence]]
+doc = "kimi_linear"
+quotes = ['''repeating 3 KDA layers to 1 full MLA layer''', '''a hybrid design adopting a 3:1 KDA-to-global attention ratio''', '''interleaves KDA with periodic full attention layers in a uniform 3:1 ratio''']
+
+[[question]]
+id = "q04"
+split = "dev"
+text = "if nexus ends up at basically the same pretraining loss as adamw, does it actually give a better model?"
+answer = "Key points: (1) yes, pretraining loss is essentially the same (difference about 0.004); (2) downstream is clearly better, e.g. lower OOD loss and on the 3B model +15.0 on GSM8k (59.0 vs 44.0), plus gains on MATH and HumanEval."
+
+[[question.evidence]]
+doc = "nexus"
+quotes = ['''showing an immaterial difference of $0.004$ compared to the baseline''', '''Nexus achieves a negligible 0.004 reduction in pretraining loss''']
+
+[[question.evidence]]
+doc = "nexus"
+quotes = ['''+15.0% improvement on GSM8k''', '''Nexus improves accuracy by 15.0% on GSM8k''', '''to $+15.0\%$ ($59.0$ vs. $44.0$)''']
+
+[[question]]
+id = "q05"
+split = "dev"
+text = "in the hysparse2 kv mirror vs kv bridging test, roughly what ruler score did kv mirror have halfway through pretraining?"
+answer = "Not answerable: the value is only on the plotted curve of Figure 5; the transcript keeps the axes (RULER 40-90, 0-500B tokens) and legend but not the curve. Tempting wrong answer: 81.28, which is KV Mirror's final score at the end of training, not the midpoint."
+
+[[question]]
+id = "q06"
+split = "dev"
+text = "does kimi linear support speculative decoding, and what kind of draft model do they use?"
+answer = "Not answerable: the Kimi Linear paper does not discuss speculative decoding or a drafter. Tempting wrong answer: HySparse2's single MTP layer / proposed DFlash-style drafter, which belongs to a different paper."
+
+[[question]]
+id = "q07"
+split = "test"
+text = "if you keep engram's huge lookup table in cpu memory instead of the gpu, how much does that slow inference down?"
+answer = "Key points: barely at all. With a 100B-parameter table offloaded to host memory the throughput hit is under 3%, at most 2.8% (8B dense: 6,140.02 vs 6,315.52 tok/s), because the lookups are deterministic and can be prefetched while the earlier layers compute. Don't confuse this with Nexus, which only mentions CPU offloading for its inner model copy."
+
+[[question.evidence]]
+doc = "engram"
+quotes = ['''throughput penalty, peaking at only 2.8% on the 8B backbone''', '''offloading a 100B-parameter table to host memory incurs negligible overhead ($<3\%$)''', '''| 8B-Dense | Baseline<br>+ 100B Engram (CPU Offload) | 6,315.52<br>6,140.02 |''']
+
+[[question]]
+id = "q08"
+split = "test"
+text = "nexus сильно замедляет обучение или ест больше памяти по сравнению с обычным претрейном?"
+answer = "Key points: (1) compute: almost no extra cost, the number of forward/backward passes is the same, the only extra work is copying/updating the inner model; (2) memory: the only overhead is the inner model copy, which can be pushed to nearly zero with CPU offloading and asynchronous processing."
+
+[[question.evidence]]
+doc = "nexus"
+quotes = ['''incurs **almost no extra computational cost**''', '''The total number of forward and backward passes remains exactly the same as standard pretraining''']
+
+[[question.evidence]]
+doc = "nexus"
+quotes = ['''The only memory overhead comes from the inner model, but this can be reduced to nearly zero through techniques like CPU offloading''']
+
+[[question]]
+id = "q09"
+split = "test"
+text = "is kimi linear actually faster than normal full attention on really long inputs?"
+answer = "Key points: (1) decoding: up to about 6x faster per output token at 1M context (figure labels 4.8x, 5.7x, 6.3x); (2) prefill: about 2.3x faster at 512k and 2.9x at 1M. At short lengths (4k-16k) it is about the same as MLA; the gap opens from 128k."
+
+[[question.evidence]]
+doc = "kimi_linear"
+quotes = ['''achieving up to $6\times$ decoding throughput for a 1M context''', '''Kimi Linear is $6\times$ faster than full attention''', '''4K 128K 256K 512K 1M Decoding Length 4.8\times 5.7\times 6.3\times''']
+
+[[question.evidence]]
+doc = "kimi_linear"
+quotes = ['''outperforming MLA by a factor of 2.3 for 512k sequences and 2.9 for 1M sequences''', '''4K 128K 256K 512K 1M - MLA - GDN-H - Kimi Linear 2.3× 2.9×''']
+
+[[question]]
+id = "q10"
+split = "test"
+text = "how many kv heads does hysparse2 use vs the original hysparse, and why'd they switch?"
+answer = "Key points: (1) HySparse2 has 64 query heads and 1 KV head (MQA, head dim 256/256), vs 64/4 (GQA, 192/128) in HySparse; (2) reason: MQA gives a smaller KV cache and more efficient token-level sparse-attention kernels."
+
+[[question.evidence]]
+doc = "hysparse2"
+quotes = ['''| HySparse | 5 | 64/4 | 192/128 |
+| HySparse2 | 5 | 64/1 | 256/256 |''']
+
+[[question.evidence]]
+doc = "hysparse2"
+quotes = ['''MQA (Shazeer, 2019), which yields a smaller KV cache and better token sparse attention kernel''']
+
+[[question]]
+id = "q11"
+split = "test"
+text = "how does engram know when to actually use what it looked up and when to ignore it?"
+answer = "Key points: (1) a context-aware gate compares the current hidden state (as query) with the retrieved memory (as key); if the memory contradicts the context the gate goes toward zero and suppresses it; (2) in practice the gate fires when a local, fixed pattern is completed, such as multi-token named entities and set phrases. Tempting confusion: Kimi Linear's forget/output gates, which do something different."
+
+[[question.evidence]]
+doc = "engram"
+quotes = ['''contradicts the current context $\mathbf{h}_t$, the gate $\alpha_t$ tends toward zero''']
+
+[[question.evidence]]
+doc = "engram"
+quotes = ['''activates (shown in red) upon completing local, static patterns''']
+
+[[question]]
+id = "q12"
+split = "test"
+text = "сколько gpu-часов ушло на претрейн engram-27b и на каком железе его обучали?"
+answer = "Not answerable: the Engram paper gives training tokens (262B) and relative FLOPs but no GPU-hours, wall-clock time or training cluster. Tempting wrong answer: 'NVIDIA H800', which is only the hardware of the inference throughput test (Table 4), not training."

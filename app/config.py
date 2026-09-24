@@ -100,7 +100,9 @@ class Settings(BaseSettings):
         Begin each page with a line containing only {separator} including the first.
         Reproduce the text exactly, in reading order. Use Markdown headings for headings and
         Markdown tables for tables, preserving every cell. Do not summarise, explain, translate
-        or add commentary. Output the page content only."""
+        or add commentary. For a figure, chart or diagram, do not draw it; write one line instead,
+        [Figure: every text label visible in it, in reading order], and transcribe its caption as
+        text. Output the page content only."""
 
     ## RAG
     chunk_size: int = 3000
