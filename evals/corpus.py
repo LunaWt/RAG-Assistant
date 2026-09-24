@@ -35,6 +35,9 @@ def load_verified_docs() -> dict[str, str]:
     snapshot = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     if sha256(CHUNKS.read_bytes()) != snapshot["chunks_sha256"]:
         raise SystemExit("chunks.jsonl differs from the snapshot: rerun evals.build_corpus")
+    pinned = {d["id"]: d["pdf_sha256"] for d in load_manifest()}
+    if pinned != {doc_id: meta["pdf_sha256"] for doc_id, meta in snapshot["docs"].items()}:
+        raise SystemExit("corpus.toml changed since the snapshot: rerun evals.build_corpus")
     docs = {}
     for doc_id, meta in snapshot["docs"].items():
         text = (MD_DIR / f"{doc_id}.md").read_text(encoding="utf-8")

@@ -17,15 +17,14 @@ def quote_error(quote: str, doc: str, docs: dict[str, str], chunks: list[tuple[s
     norm = normalize(quote)
     if not MIN_QUOTE <= len(norm) <= MAX_QUOTE:
         return f"quote is {len(norm)} chars, keep it {MIN_QUOTE}-{MAX_QUOTE}"
-    if norm not in docs[doc]:
+    occurrences = docs[doc].count(norm)
+    if occurrences == 0:
         return f"not found in {doc}.md"
-    found_in = sum(norm in text for d, text in chunks if d == doc)
-    if found_in == 0:
+    # A phrase that recurs makes every chunk repeating it count as a hit.
+    if occurrences > 1:
+        return f"too generic, {occurrences} times in {doc}.md"
+    if not any(d == doc and norm in text for d, text in chunks):
         return "split across a chunk boundary"
-    # Two is one passage inside the overlap of neighbouring chunks; more is a phrase that
-    # recurs, and every chunk repeating it would count as a hit.
-    if found_in > 2:
-        return f"too generic, found in {found_in} chunks"
     return None
 
 

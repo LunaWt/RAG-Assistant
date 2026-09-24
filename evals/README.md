@@ -31,10 +31,10 @@ why, and a correct response abstains. `answer` is never matched as a string.
 Copy quotes from `corpus/md/<doc>.md`, not from the PDF: the transcript carries Markdown
 (`**bold**`, LaTeX), and a quote only matches the text the retriever actually indexes.
 
-`py -3 -m evals.check_labels` checks every quote: 20–200 characters, present in its document,
-inside a single chunk, and in no more than two chunks of its document. The 200 cap keeps
-quotes shorter than the 300-character overlap; the two-chunk cap rejects a phrase that recurs,
-because every chunk repeating it would count as a hit.
+`py -3 -m evals.check_labels` checks every quote: 20–200 characters, present exactly once in
+its document, and inside a single chunk. The 200 cap keeps quotes shorter than the
+300-character overlap; a phrase that recurs is rejected, because every chunk repeating it
+would count as a hit.
 
 ## Definitions
 

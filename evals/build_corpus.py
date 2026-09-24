@@ -17,7 +17,7 @@ def fetch_pdf(doc: dict) -> bytes:
     if path.exists():
         data = path.read_bytes()
     else:
-        with urllib.request.urlopen(f"https://arxiv.org/pdf/{doc['arxiv']}") as response:
+        with urllib.request.urlopen(f"https://arxiv.org/pdf/{doc['arxiv']}", timeout=60) as response:
             data = response.read()
     if sha256(data) != doc["pdf_sha256"]:
         raise SystemExit(f"{doc['id']}: PDF sha256 differs from corpus.toml")
@@ -33,6 +33,9 @@ def transcript_key(doc: dict) -> dict:
         "vision_model": settings.vision_model,
         "vision_fallback_model": settings.vision_fallback_model,
         "prompt_sha256": sha256(settings.vision_prompt.encode("utf-8")),
+        "page_separator": settings.vision_page_separator,
+        "dpi": settings.vision_dpi,
+        "batch_pages": settings.vision_batch_pages,
     }
 
 
