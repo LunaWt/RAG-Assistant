@@ -48,3 +48,20 @@ would count as a hit.
 - **Unanswerable questions** are excluded from both denominators. Counting them as 0 would
   punish the retriever for a question with no right chunk, and counting them as 1 would reward
   it for free. They are scored in answer evaluation, where abstaining is the correct outcome.
+
+## Retrieval report
+
+`py -3 -m evals.retrieval` refuses to run on a corpus that differs from the snapshot or on
+labels that fail `check_labels`. It embeds every chunk and question with the production
+embedder (`settings.embedding_model`, `normalize_embeddings=True`), ranks the chunks of all
+four papers by exact cosine similarity, and scores the top 10 by the definitions above. Chroma
+in production ranks by L2 distance over the same normalized vectors, which orders identically
+(‖a − b‖² = 2 − 2·a·b), but through an approximate index. Production passes the top 3 to the
+model, so recall@3 is the number that describes the live app.
+
+It writes `results/retrieval.json`: `summary` holds the means per split, `questions` the rank
+of each fact (null when it is outside the top 10) and the ten chunk ids retrieved, and
+`provenance` the git commit, whether `app/` or `evals/` had uncommitted changes, the hashes of
+`questions.toml`, the snapshot and the chunk file, the embedding model with its Hub revision,
+the device and the library versions. The report is committed; the transcripts it was computed
+from stay local, so an exact rerun needs the same `corpus/` that the snapshot hash names.

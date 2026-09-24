@@ -23,6 +23,10 @@ class PageCountMismatch(RuntimeError):
     """The model returned a different number of pages than the batch contained."""
 
 
+class SkippedPage(PageCountMismatch):
+    """A page came back empty. The prompt asks for None on a blank page, so this one was skipped."""
+
+
 class BatchTruncated(ValueError):
     """The model hit its output cap before finishing the batch.
 
@@ -156,6 +160,10 @@ async def _transcribe(client: AsyncOpenAI, pngs: list[bytes], model: str) -> lis
     # ever reaches the job store.
     if len(pages) != len(pngs):
         raise PageCountMismatch(f'sent {len(pngs)} pages, got {len(pages)} back')
+    # Measured 24 Sep 2026: with the None line in the prompt, the Kimi Linear title page came
+    # back empty in every ten-page batch, while alone it transcribed in full.
+    if not all(pages):
+        raise SkippedPage(f'page {pages.index("") + 1} of {len(pngs)} came back empty')
     return pages
 
 
@@ -217,6 +225,11 @@ async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]
     ) from gone
 
 
+# The prompt asks for this word on an empty page. Without it the fallback model invented text
+# for blank scans (measured 24 Sep 2026), which would be indexed as the document's content.
+BLANK_PAGE = 'None'
+
+
 def _placeholder(number: int) -> str:
     # The marker is indexed with the rest of the document on purpose: a gap that retrieval can
     # surface beats a document that quietly lost a page. Fixed wording, so it cannot be
@@ -266,7 +279,7 @@ def pdf_to_markdown(pdf_path: str, on_progress=None, on_page_failed=None) -> str
     if on_progress:
         on_progress(0, total)
 
-    async def run() -> list[str]:
+    async def run() -> tuple[list[str], list[int]]:
         client = build_client()
         failed: list[int] = []
 
@@ -293,11 +306,12 @@ def pdf_to_markdown(pdf_path: str, on_progress=None, on_page_failed=None) -> str
                 )
                 if on_progress:
                     on_progress(len(transcripts), total)
-            return transcripts
+            return transcripts, failed
         finally:
             await client.close()
 
-    text = '\n\n'.join(page for page in asyncio.run(run()) if page)
-    if not text.strip():
+    transcripts, failed = asyncio.run(run())
+    pages = [page for page in transcripts if page != BLANK_PAGE]
+    if len(pages) == len(failed):
         raise ValueError('No text extracted')
-    return text
+    return '\n\n'.join(pages)

@@ -20,15 +20,15 @@ answer = "Key points: (1) with the module switched off, factual-knowledge tasks 
 
 [[question.evidence]]
 doc = "engram"
-quotes = ['''retaining only 29–44% of the original performance''', '''TriviaQA-ZH (44%), PopQA (44%), TriviaQA (29%)''', '''Factual knowledge relies heavily on''']
+quotes = ['''retaining only $29\!-\!44\%$ of the original performance''', '''TriviaQA-ZH (44%), PopQA (44%), TriviaQA (29%)''', '''Factual knowledge relies heavily on''']
 
 [[question.evidence]]
 doc = "engram"
-quotes = ['''retaining 81–93% (e.g., C3 at 93%)''', '''C3 (93%), RACE-Middle (89%), RACE-High (84%)''', '''reading comprehension is largely preserved by the backbone''']
+quotes = ['''retaining $81\!-\!93\%$ (e.g., C3 at $93\%$)''', '''C3 (93%), RACE-Middle (89%), RACE-High (84%)''', '''reading comprehension is largely preserved by the backbone''']
 
 [[question.evidence]]
 doc = "engram"
-quotes = ['''Engram-27B consistently improves over the iso-parameter and iso-FLOPs MoE-27B baseline''', '''MMLU: +3.0, MMLU-Pro: +1.8, CMMLU: +4.0''']
+quotes = ['''Engram-27B consistently improves over the iso-parameter and iso-FLOPs MoE-27B baseline''', '''MMLU: $+3.0$, MMLU-Pro: $+1.8$, CMMLU: $+4.0$''']
 
 [[question]]
 id = "q03"
@@ -52,11 +52,11 @@ answer = "Key points: (1) yes, pretraining loss is essentially the same (differe
 
 [[question.evidence]]
 doc = "nexus"
-quotes = ['''showing an immaterial difference of $0.004$ compared to the baseline''', '''Nexus achieves a negligible 0.004 reduction in pretraining loss''']
+quotes = ['''showing an immaterial difference of 0.004 compared to the baseline''', '''Nexus achieves a negligible $0.004$ reduction in pretraining loss''']
 
 [[question.evidence]]
 doc = "nexus"
-quotes = ['''+15.0% improvement on GSM8k''', '''Nexus improves accuracy by 15.0% on GSM8k''', '''to $+15.0\%$ ($59.0$ vs. $44.0$)''']
+quotes = ['''$+15.0\%$ improvement on GSM8k''', '''Nexus improves accuracy by $15.0\%$ on GSM8k''', '''to $+15.0\%$ ($59.0$ vs. $44.0$)''']
 
 [[question]]
 id = "q05"
@@ -78,7 +78,7 @@ answer = "Key points: barely at all. With a 100B-parameter table offloaded to ho
 
 [[question.evidence]]
 doc = "engram"
-quotes = ['''throughput penalty, peaking at only 2.8% on the 8B backbone''', '''offloading a 100B-parameter table to host memory incurs negligible overhead ($<3\%$)''', '''| 8B-Dense | Baseline<br>+ 100B Engram (CPU Offload) | 6,315.52<br>6,140.02 |''']
+quotes = ['''throughput penalty, peaking at only $2.8\%$ on the 8B backbone''', '''offloading a 100B-parameter table to host memory incurs negligible overhead ($<3\%$)''', '''| 8B-Dense | Baseline<br>+ 100B Engram (CPU Offload) | 6,315.52<br>6,140.02 |''']
 
 [[question]]
 id = "q08"
@@ -102,11 +102,11 @@ answer = "Key points: (1) decoding: up to about 6x faster per output token at 1M
 
 [[question.evidence]]
 doc = "kimi_linear"
-quotes = ['''achieving up to $6\times$ decoding throughput for a 1M context''', '''Kimi Linear is $6\times$ faster than full attention''', '''4K 128K 256K 512K 1M Decoding Length 4.8\times 5.7\times 6.3\times''']
+quotes = ['''achieving up to $6\times$ decoding throughput for a 1M context''', '''Kimi Linear is $6\times$ faster than full attention''', '''4K 128K 256K 512K 1M Decoding Length 6.3x 5.7x 4.8x''']
 
 [[question.evidence]]
 doc = "kimi_linear"
-quotes = ['''outperforming MLA by a factor of 2.3 for 512k sequences and 2.9 for 1M sequences''', '''4K 128K 256K 512K 1M - MLA - GDN-H - Kimi Linear 2.3× 2.9×''']
+quotes = ['''outperforming MLA by a factor of 2.3 for 512k sequences and 2.9 for 1M sequences''', '''Prefilling Length for MLA, GDN-H, and Kimi Linear from 4K to 1M, with annotations 2.3× and 2.9×''']
 
 [[question]]
 id = "q10"
