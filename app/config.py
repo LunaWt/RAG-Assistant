@@ -102,7 +102,8 @@ class Settings(BaseSettings):
         Markdown tables for tables, preserving every cell. Do not summarise, explain, translate
         or add commentary. For a figure, chart or diagram, do not draw it; write one line instead,
         [Figure: every text label visible in it, in reading order], and transcribe its caption as
-        text. Output the page content only."""
+        text. If a page has no text and no figure at all, write exactly None as its content.
+        Output the page content only."""
 
     ## RAG
     chunk_size: int = 3000

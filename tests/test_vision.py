@@ -152,10 +152,13 @@ async def test_truncated_batch_falls_back_to_one_call_per_page() -> None:
 
 
 @pytest.mark.asyncio
-async def test_short_batch_falls_back_to_one_call_per_page() -> None:
+@pytest.mark.parametrize(
+    "reply", [f"{SEP}\nonly one", f"{SEP}\n{SEP}\ntwo"], ids=["short", "empty page"]
+)
+async def test_short_batch_falls_back_to_one_call_per_page(reply: str) -> None:
     """Two pages in, one page back: the batch is retried page by page rather than accepted."""
     client = FakeVisionClient(
-        response(f"{SEP}\nonly one"),
+        response(reply),
         response(f"{SEP}\none"),
         response(f"{SEP}\ntwo"),
     )
@@ -199,7 +202,7 @@ def test_pdf_to_markdown_batches_and_reports_progress(
     monkeypatch.setattr(settings, "vision_batch_pages", 2)
     stub_pdf(monkeypatch, 3)
     client = FakeVisionClient(
-        response(f"{SEP}\none\n{SEP}\ntwo"), response(f"{SEP}\nthree")
+        response(f"{SEP}\none\n{SEP}\nNone"), response(f"{SEP}\nthree")
     )
     monkeypatch.setattr(vision, "build_client", lambda: client)
     seen: list[tuple[int, int]] = []
@@ -208,7 +211,7 @@ def test_pdf_to_markdown_batches_and_reports_progress(
         "document.pdf", on_progress=lambda d, t: seen.append((d, t))
     )
 
-    assert text == "one\n\ntwo\n\nthree"
+    assert text == "one\n\nthree"
     assert client.batch_sizes == [2, 1]
     assert seen == [(0, 3), (2, 3), (3, 3)]
     assert client.closed
@@ -234,6 +237,21 @@ def test_a_failed_page_becomes_a_marker_in_the_indexed_text(
     assert text == "one\n\n[page 2 could not be transcribed]\n\nthree"
     assert reported == [(2, 1)]
     assert client.closed
+
+
+def test_blank_pages_and_a_marker_are_not_a_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "vision_batch_pages", 1)
+    monkeypatch.setattr(settings, "vision_max_failed_fraction", 0.5)
+    stub_pdf(monkeypatch, 3)
+    client = FakeVisionClient(
+        response(f"{SEP}\nNone"), *[transient()] * 4, response(f"{SEP}\nNone")
+    )
+    monkeypatch.setattr(vision, "build_client", lambda: client)
+
+    with pytest.raises(ValueError, match="No text extracted"):
+        vision.pdf_to_markdown("document.pdf")
 
 
 def test_too_many_failed_pages_fail_the_whole_document(
