@@ -1,0 +1,23 @@
+[[doc]]
+id = "nexus"
+arxiv = "2604.09258v2"
+title = "Nexus: Same Pretraining Loss, Better Downstream Generalization via Common Minima"
+pdf_sha256 = "34ad7125d41537b28843dda5f8933816d218dbaeae5b4cbba8276529f6beaf3b"
+
+[[doc]]
+id = "engram"
+arxiv = "2601.07372v2"
+title = "Conditional Memory via Scalable Lookup: A New Axis of Sparsity for Large Language Models"
+pdf_sha256 = "8eab2dd35e4557d4142e5959697836f6cf926d0fbc29016257f1eea5be73df5d"
+
+[[doc]]
+id = "kimi_linear"
+arxiv = "2510.26692v2"
+title = "Kimi Linear: An Expressive, Efficient Attention Architecture"
+pdf_sha256 = "e2e23a449fc9bb27e34e783d20b2e6cd0f1ac67d58efdc0479c03c54db956a17"
+
+[[doc]]
+id = "hysparse2"
+arxiv = "2609.26368v1"
+title = "HySparse2: Hybrid Sparse Attention with Two-Level KV Sharing"
+pdf_sha256 = "48b096f96ed9ca546bef78a9f55e2b39d6b029002b57495b4d21e5ca4aa556f1"
