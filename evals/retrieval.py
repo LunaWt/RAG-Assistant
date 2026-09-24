@@ -38,6 +38,9 @@ def summarize(rows: list[dict]) -> dict[str, dict]:
     summary = {}
     for split in ("dev", "test"):
         scored = [r["scores"] for r in rows if r["split"] == split and r["scores"]]
+        if not scored:
+            summary[split] = {"answerable": 0}
+            continue
         means = {m: round(sum(s[m] for s in scored) / len(scored), 4) for m in scored[0]}
         means["mrr"] = means.pop("rr")
         summary[split] = {"answerable": len(scored)} | means
@@ -54,7 +57,8 @@ def provenance(model: SentenceTransformer, questions_bytes: bytes) -> dict:
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "git_commit": git("rev-parse", "HEAD"),
         "git_dirty": bool(git("status", "--porcelain", "--", "../app", ".", ":!results")),
-        "questions_sha256": sha256(questions_bytes),
+        # The bytes git stores: a Windows checkout adds CR, which would change the hash by platform.
+        "questions_sha256": sha256(questions_bytes.replace(b"\r\n", b"\n")),
         "snapshot_sha256": sha256(SNAPSHOT.read_bytes()),
         "chunks_sha256": snapshot["chunks_sha256"],
         "chunk_size": snapshot["chunk_size"],

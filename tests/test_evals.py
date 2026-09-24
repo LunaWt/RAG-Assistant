@@ -63,9 +63,10 @@ def test_unanswerable_questions_stay_out_of_the_means():
         {"split": "dev", "scores": hit},
         {"split": "dev", "scores": miss},
         {"split": "dev", "scores": None},
-        {"split": "test", "scores": hit},
+        {"split": "test", "scores": None},
     ]
     summary = summarize(rows)
+    assert summary["test"] == {"answerable": 0}
     assert summary["dev"]["answerable"] == 2
     assert summary["dev"]["mrr"] == 0.5
     assert summary["dev"]["recall@3"] == 0.5
