@@ -407,6 +407,65 @@ async def test_tool_call_arguments_are_joined_by_index(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
+async def test_whole_tool_calls_without_an_index_stay_separate(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Google sends each call whole with index None; two of them must not merge into one."""
+    client = ScriptedClient(
+        turns=[
+            [
+                chunk(tool_calls=[
+                    call_fragment(None, id="a", name="calculator", arguments='{"expression": "2 + 2"}'),
+                ]),
+                chunk(tool_calls=[
+                    call_fragment(None, id="b", name="calculator", arguments='{"expression": "10 / 4"}'),
+                ]),
+            ],
+            [text_chunk("готово")],
+        ]
+    )
+    install_client(monkeypatch, client)
+
+    events = [event async for event in agent_module.agent_loop("Посчитай оба")]
+
+    assert events[0] == {
+        "type": "tool_start",
+        "name": ["calculator", "calculator"],
+        "args": [{"expression": "2 + 2"}, {"expression": "10 / 4"}],
+    }
+    assert [m["content"] for m in client.tool_replies(1)] == ["4", "2.5"]
+
+
+@pytest.mark.asyncio
+async def test_thinking_tagged_in_the_content_is_a_thought(monkeypatch: pytest.MonkeyPatch):
+    """Gemma's <thought> text is shown as reasoning, and is neither the answer nor sent back."""
+    client = ScriptedClient(
+        turns=[
+            [
+                text_chunk("<thought>need the"),
+                text_chunk(" calculator\n"),
+                text_chunk("</thought>"),
+                call_chunk("calculator", expression="2 + 2"),
+            ],
+            [text_chunk("<thought>got 4\n"), text_chunk("</thought>2 + 2 = 4")],
+        ]
+    )
+    install_client(monkeypatch, client)
+
+    events = [event async for event in agent_module.agent_loop("Посчитай")]
+
+    assert [e for e in events if e["type"] in ("thought_delta", "text_delta")] == [
+        {"type": "thought_delta", "text": "need the"},
+        {"type": "thought_delta", "text": " calculator\n"},
+        {"type": "thought_delta", "text": "got 4\n"},
+        {"type": "text_delta", "text": "2 + 2 = 4"},
+    ]
+    assistant_turn = client.sent[1][-2]
+    assert assistant_turn["role"] == "assistant"
+    assert assistant_turn["content"] is None
+
+
+@pytest.mark.asyncio
 async def test_agent_loop_finishes_on_an_empty_stream(monkeypatch: pytest.MonkeyPatch):
     """A model turn with no chunks still terminates with done and nothing else."""
     install_client(monkeypatch, ScriptedClient(turns=[[]]))

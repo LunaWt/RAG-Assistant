@@ -215,7 +215,11 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
     """Stream one model turn, yielding UI events and filling `turn`.
 
     Tool calls arrive in pieces: `function.arguments` is a fragment of a JSON string and
-    only `index` says which call it belongs to, so fragments are joined per index.
+    only `index` says which call it belongs to, so fragments are joined per index. Google's
+    endpoint sends every call whole and without an index, so each of those is a call of its own.
+
+    Gemma on Google's endpoint streams its thinking inside the content, wrapped in
+    <thought>...</thought> (measured 25 Sep 2026); that part is a thought, not the answer.
     """
     request: dict = {
         "model": settings.main_model,
@@ -229,6 +233,7 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
         request["tool_choice"] = "auto"
 
     text: list[str] = []
+    in_thought = False
     stream = await client.chat.completions.create(**request)
     async for chunk in stream:
         if not chunk.choices:
@@ -241,11 +246,19 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
         )
         if reasoning:
             yield {"type": "thought_delta", "text": reasoning}
-        if delta.content:
-            text.append(delta.content)
-            yield {"type": "text_delta", "text": delta.content}
+        rest = delta.content or ""
+        while rest:
+            piece, tag, rest = rest.partition("</thought>" if in_thought else "<thought>")
+            if piece and in_thought:
+                yield {"type": "thought_delta", "text": piece}
+            elif piece:
+                text.append(piece)
+                yield {"type": "text_delta", "text": piece}
+            if tag:
+                in_thought = not in_thought
         for fragment in delta.tool_calls or []:
-            call = turn.calls.setdefault(fragment.index, ToolCall())
+            index = fragment.index if fragment.index is not None else len(turn.calls)
+            call = turn.calls.setdefault(index, ToolCall())
             if fragment.id:
                 call.id = fragment.id
             function = fragment.function
