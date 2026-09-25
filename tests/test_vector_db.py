@@ -157,8 +157,12 @@ def test_rag_search_ranks_matching_documents_and_filters_filename(
     vector_db.add_document_to_db(["Apple nutrition"], "food.pdf")
 
     results = vector_db.rag_search("California")
-    assert results[0] == "California facts"
-    assert set(results) == {"California facts", "Neural networks", "Apple nutrition"}
+    assert results[0] == {"text": "California facts", "source": "science.pdf"}
+    assert {r["text"] for r in results} == {
+        "California facts",
+        "Neural networks",
+        "Apple nutrition",
+    }
     assert vector_db.rag_search("California", filename="food.pdf") == [
-        "Apple nutrition"
+        {"text": "Apple nutrition", "source": "food.pdf"}
     ]

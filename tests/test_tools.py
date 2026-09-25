@@ -2,7 +2,7 @@ import pytest
 import app.services.tools as tools_module
 from ddgs.exceptions import DDGSException
 
-from app.services.tools import calculator, search_knowledge_base, web_search
+from app.services.tools import ToolError, calculator, search_knowledge_base, web_search
 
 
 @pytest.mark.parametrize(
@@ -32,12 +32,18 @@ def test_calculator_valid_expressions(expression, expected):
     ],
 )
 def test_calculator_error_messages(expression, expected_prefix):
-    assert str(calculator(expression)).startswith(expected_prefix)
+    with pytest.raises(ToolError) as error:
+        calculator(expression)
+    assert str(error.value).startswith(expected_prefix)
 
 
 def test_search_knowledge_base_without_filename(monkeypatch: pytest.MonkeyPatch):
-    def fake_rag_search(query: str) -> list[str]:
-        return [query, "Информация про Калифорнию.", "Информация про нейронные сети"]
+    def fake_rag_search(query: str) -> list[dict]:
+        return [
+            {"text": query, "source": "a.pdf"},
+            {"text": "Информация\nпро Калифорнию.", "source": "a.pdf"},
+            {"text": "Информация про нейронные сети", "source": "b.pdf"},
+        ]
 
     monkeypatch.setattr(
         tools_module.vector_db,
@@ -45,18 +51,26 @@ def test_search_knowledge_base_without_filename(monkeypatch: pytest.MonkeyPatch)
         fake_rag_search,
     )
 
-    result = search_knowledge_base(query="California search")
+    text, hits = search_knowledge_base(query="California search")
 
-    assert result == (
+    assert text == (
         "California search\n\n"
-        "Информация про Калифорнию.\n\n"
+        "Информация\nпро Калифорнию.\n\n"
         "Информация про нейронные сети"
     )
+    assert hits == [
+        {"title": "a.pdf", "snippet": "California search"},
+        {"title": "a.pdf", "snippet": "Информация про Калифорнию."},
+        {"title": "b.pdf", "snippet": "Информация про нейронные сети"},
+    ]
 
 
 def test_search_knowledge_base_with_filename(monkeypatch: pytest.MonkeyPatch):
-    def fake_rag_search_with_filename(query: str, filename: str) -> list[str]:
-        return [query, filename, "Информация про Калифорнию."]
+    def fake_rag_search_with_filename(query: str, filename: str) -> list[dict]:
+        return [
+            {"text": text, "source": filename}
+            for text in (query, filename, "Информация про Калифорнию.")
+        ]
 
     monkeypatch.setattr(
         tools_module.vector_db,
@@ -64,17 +78,17 @@ def test_search_knowledge_base_with_filename(monkeypatch: pytest.MonkeyPatch):
         fake_rag_search_with_filename,
     )
 
-    result = search_knowledge_base(
+    text, _ = search_knowledge_base(
         query="California search", filename="File about California"
     )
 
-    assert result == (
+    assert text == (
         "California search\n\nFile about California\n\nИнформация про Калифорнию."
     )
 
 
 def test_search_knowledge_base_error(monkeypatch: pytest.MonkeyPatch):
-    def fake_rag_search_error(query: str) -> list[str]:
+    def fake_rag_search_error(query: str) -> list[dict]:
         raise RuntimeError("database error")
 
     monkeypatch.setattr(
@@ -83,12 +97,11 @@ def test_search_knowledge_base_error(monkeypatch: pytest.MonkeyPatch):
         fake_rag_search_error,
     )
 
-    result = search_knowledge_base(
-        query="California search",
-    )
+    with pytest.raises(ToolError) as error:
+        search_knowledge_base(query="California search")
 
     assert (
-        result
+        str(error.value)
         == "Knowledge base search failed: database error. Try web_search or answer from your own knowledge."
     )
 
@@ -266,17 +279,18 @@ async def test_web_search_summarizes_non_empty_text_and_keeps_valid_cards(
 
 
 @pytest.mark.asyncio
-async def test_web_search_returns_ddgs_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_web_search_raises_ddgs_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_ddg_search(query: str) -> list[dict]:
         raise DDGSException("service unavailable")
 
     monkeypatch.setattr(tools_module, "_ddg_search", fake_ddg_search)
 
-    assert await web_search("query") == ("ddgs search error service unavailable", [])
+    with pytest.raises(ToolError, match="^ddgs search error service unavailable$"):
+        await web_search("query")
 
 
 @pytest.mark.asyncio
-async def test_web_search_returns_system_error_for_dependency_failure(
+async def test_web_search_raises_system_error_for_dependency_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_ddg_search(query: str) -> list[dict]:
@@ -284,4 +298,5 @@ async def test_web_search_returns_system_error_for_dependency_failure(
 
     monkeypatch.setattr(tools_module, "_ddg_search", fake_ddg_search)
 
-    assert await web_search("query") == ("Some system error: dependency failed", [])
+    with pytest.raises(ToolError, match="^Some system error: dependency failed$"):
+        await web_search("query")

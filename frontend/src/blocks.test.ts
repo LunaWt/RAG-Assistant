@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyEvent } from './blocks';
-import type { Block } from './types';
+import type { Block, ToolResult } from './types';
 
 const hit = { title: 'Docs', href: 'https://example.com/docs' };
 
@@ -28,55 +28,39 @@ describe('applyEvent', () => {
     expect(after[0]).not.toBe(before[0]);
   });
 
-  it('keeps one block for a batch that reports several results', () => {
+  it('puts each result at its call index, whatever order the calls finish in', () => {
     let blocks: Block[] = [];
     blocks = applyEvent(blocks, {
       type: 'tool_start',
-      name: ['web_search', 'web_search'],
-      args: [{ query: 'a' }, { query: 'b' }],
+      name: ['web_search', 'calculator'],
+      args: [{ query: 'a' }, { expression: '1 +' }],
     });
-    blocks = applyEvent(blocks, { type: 'tool_hits', query: 'a', hits: [hit] });
-    blocks = applyEvent(blocks, { type: 'tool_hits', query: 'b', hits: [hit] });
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toEqual({
-      type: 'tool',
-      names: ['web_search', 'web_search'],
-      args: [{ query: 'a' }, { query: 'b' }],
-      running: true,
-      results: [
-        { query: 'a', hits: [hit] },
-        { query: 'b', hits: [hit] },
-      ],
+    const failed: ToolResult = { status: 'error', hits: [], error: 'Syntax error in expression' };
+    blocks = applyEvent(blocks, { type: 'tool_result', index: 1, result: failed });
+    expect(blocks[0]).toMatchObject({ results: [null, failed] });
+    blocks = applyEvent(blocks, {
+      type: 'tool_result',
+      index: 0,
+      result: { status: 'ok', hits: [hit] },
     });
-  });
-
-  it('closes the tool block as soon as the model speaks again', () => {
-    let blocks: Block[] = [];
-    blocks = applyEvent(blocks, { type: 'tool_start', name: ['web_search'], args: [{}] });
-    blocks = applyEvent(blocks, { type: 'tool_hits', query: 'a', hits: [hit] });
-    blocks = applyEvent(blocks, { type: 'thought_delta', text: 'got it' });
-    expect(blocks).toHaveLength(2);
-    expect(blocks[0]).toMatchObject({ type: 'tool', running: false });
-  });
-
-  it('closes a tool block that never reported when the answer ends', () => {
-    let blocks: Block[] = [];
-    blocks = applyEvent(blocks, { type: 'tool_start', name: ['calculator'], args: [{}] });
-    blocks = applyEvent(blocks, { type: 'done' });
-    expect(blocks[0]).toMatchObject({ type: 'tool', running: false, results: [] });
-  });
-
-  it('starts a finished tool block when hits arrive with no tool running', () => {
-    const blocks = applyEvent([], { type: 'tool_hits', query: 'x', hits: [hit] });
     expect(blocks).toEqual([
-      { type: 'tool', names: [], args: [], running: false, results: [{ query: 'x', hits: [hit] }] },
+      {
+        type: 'tool',
+        names: ['web_search', 'calculator'],
+        args: [{ query: 'a' }, { expression: '1 +' }],
+        results: [{ status: 'ok', hits: [hit] }, failed],
+      },
     ]);
   });
 
   it('gives every tool round its own block', () => {
     let blocks: Block[] = [];
     blocks = applyEvent(blocks, { type: 'tool_start', name: ['web_search'], args: [{}] });
-    blocks = applyEvent(blocks, { type: 'tool_hits', query: 'x', hits: [hit] });
+    blocks = applyEvent(blocks, {
+      type: 'tool_result',
+      index: 0,
+      result: { status: 'ok', hits: [hit] },
+    });
     blocks = applyEvent(blocks, { type: 'tool_start', name: ['calculator'], args: [{}] });
     expect(blocks).toHaveLength(2);
   });

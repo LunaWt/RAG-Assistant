@@ -4,56 +4,31 @@ function replacingLast(blocks: Block[], block: Block): Block[] {
   return [...blocks.slice(0, -1), block];
 }
 
-// One tool_start can announce several parallel calls, each reporting its own tool_hits, and the
-// protocol never says how many are coming. So a tool block stays open until the model speaks
-// again, and the same array comes back when there was nothing to close.
-function closingTools(blocks: Block[]): Block[] {
-  if (!blocks.some((block) => block.type === 'tool' && block.running)) return blocks;
-  return blocks.map((block) =>
-    block.type === 'tool' && block.running ? { ...block, running: false } : block,
-  );
-}
-
 export function applyEvent(blocks: Block[], event: ChatEvent): Block[] {
+  const last = blocks.at(-1);
   switch (event.type) {
-    case 'thought_delta': {
-      const base = closingTools(blocks);
-      const last = base.at(-1);
+    case 'thought_delta':
       return last?.type === 'thought'
-        ? replacingLast(base, { ...last, text: last.text + event.text })
-        : [...base, { type: 'thought', text: event.text }];
-    }
+        ? replacingLast(blocks, { ...last, text: last.text + event.text })
+        : [...blocks, { type: 'thought', text: event.text }];
 
-    case 'text_delta': {
-      const base = closingTools(blocks);
-      const last = base.at(-1);
+    case 'text_delta':
       return last?.type === 'answer'
-        ? replacingLast(base, { ...last, text: last.text + event.text })
-        : [...base, { type: 'answer', text: event.text }];
-    }
+        ? replacingLast(blocks, { ...last, text: last.text + event.text })
+        : [...blocks, { type: 'answer', text: event.text }];
 
     case 'tool_start':
       return [
-        ...closingTools(blocks),
-        { type: 'tool', names: event.name, args: event.args, running: true, results: [] },
-      ];
-
-    case 'tool_hits': {
-      const result = { query: event.query, hits: event.hits };
-      for (let i = blocks.length - 1; i >= 0; i--) {
-        const block = blocks[i];
-        if (block.type === 'tool' && block.running) {
-          return blocks.with(i, { ...block, results: [...block.results, result] });
-        }
-      }
-      return [
         ...blocks,
-        { type: 'tool', names: [], args: [], running: false, results: [result] },
+        { type: 'tool', names: event.name, args: event.args, results: event.name.map(() => null) },
       ];
-    }
 
-    case 'done':
-      return closingTools(blocks);
+    // The round a result belongs to is always the last block: the model cannot speak again
+    // until every call of the round has reported.
+    case 'tool_result':
+      return last?.type === 'tool'
+        ? replacingLast(blocks, { ...last, results: last.results.with(event.index, event.result) })
+        : blocks;
 
     default:
       return blocks;

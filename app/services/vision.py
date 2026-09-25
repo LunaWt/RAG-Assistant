@@ -249,10 +249,10 @@ async def _transcribe_batch(
     if len(pngs) > 1:
         try:
             return await pages_to_markdown(client, pngs)
-        except PAGE_FAILURES:
+        except PAGE_FAILURES as error:
             logger.warning(
-                'Vision batch of %d pages starting at %d failed; retrying page by page',
-                len(pngs), first_number,
+                'Vision batch of %d pages starting at %d failed (%s: %s); retrying page by page',
+                len(pngs), first_number, type(error).__name__, error,
             )
     transcripts: list[str] = []
     for offset, png in enumerate(pngs):

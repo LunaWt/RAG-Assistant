@@ -692,15 +692,19 @@ async def test_user_gets_events_expected_order(
     events = [
             {'type': 'thought_delta', 'text': 'Looking'},
             {'type': 'thought_delta', 'text': 'into db'},
+            {'type': 'tool_start', 'name': ['web_search'], 'args': [{'query': 'California check'}]},
             {
-                'type': 'tool_hits', 
-                'query': 'California check', 
-                'hits': [
-                    {
-                        'title': 'California weather',
-                        'href': 'https://weather.com',
-                    }
-                ]
+                'type': 'tool_result',
+                'index': 0,
+                'result': {
+                    'status': 'ok',
+                    'hits': [
+                        {
+                            'title': 'California weather',
+                            'href': 'https://weather.com',
+                        }
+                    ],
+                },
             },
             {'type': 'text_delta', 'text': 'The weather in california'},
             {'type': 'text_delta', 'text': 'is sunny.'},
@@ -740,25 +744,24 @@ async def test_chat_persists_assembled_blocks_after_done(
             {'type': 'thought_delta', 'text': 'Looking'},
             {'type': 'thought_delta', 'text': ' into db'},
             {'type': 'tool_start', 'name': ['calculator'], 'args': [{'expression': '2 + 2'}]},
+            {'type': 'tool_result', 'index': 0, 'result': {'status': 'ok', 'hits': []}},
             {
                 'type': 'tool_start',
                 'name': ['web_search', 'web_search'],
                 'args': [{'query': 'California check'}, {'query': 'Nevada check'}],
             },
             {
-                'type': 'tool_hits', 
-                'query': 'California check', 
-                'hits': [
-                    {
-                        'title': 'California weather',
-                        'href': 'https://weather.com',
-                    }
-                ]
+                'type': 'tool_result',
+                'index': 1,
+                'result': {
+                    'status': 'ok',
+                    'hits': [{'title': 'Nevada weather', 'href': 'https://weather.com/nv'}],
+                },
             },
             {
-                'type': 'tool_hits',
-                'query': 'Nevada check',
-                'hits': [{'title': 'Nevada weather', 'href': 'https://weather.com/nv'}],
+                'type': 'tool_result',
+                'index': 0,
+                'result': {'status': 'error', 'hits': [], 'error': 'ddgs search error timeout'},
             },
             {'type': 'text_delta', 'text': 'The weather in california'},
             {'type': 'text_delta', 'text': ' is sunny.'},
@@ -808,7 +811,7 @@ async def test_chat_persists_assembled_blocks_after_done(
             'content': json.dumps({
                 'names': ['calculator'],
                 'args': [{'expression': '2 + 2'}],
-                'results': [],
+                'results': [{'status': 'ok', 'hits': []}],
             }),
         },
         {
@@ -817,12 +820,9 @@ async def test_chat_persists_assembled_blocks_after_done(
                 'names': ['web_search', 'web_search'],
                 'args': [{'query': 'California check'}, {'query': 'Nevada check'}],
                 'results': [
+                    {'status': 'error', 'hits': [], 'error': 'ddgs search error timeout'},
                     {
-                        'query': 'California check',
-                        'hits': [{'title': 'California weather', 'href': 'https://weather.com'}],
-                    },
-                    {
-                        'query': 'Nevada check',
+                        'status': 'ok',
                         'hits': [{'title': 'Nevada weather', 'href': 'https://weather.com/nv'}],
                     },
                 ],
@@ -843,15 +843,19 @@ async def test_chat_does_not_save_assistant_without_done(
     events = [
             {'type': 'thought_delta', 'text': 'Looking'},
             {'type': 'thought_delta', 'text': ' into db'},
+            {'type': 'tool_start', 'name': ['web_search'], 'args': [{'query': 'California check'}]},
             {
-                'type': 'tool_hits', 
-                'query': 'California check', 
-                'hits': [
-                    {
-                        'title': 'California weather',
-                        'href': 'https://weather.com',
-                    }
-                ]
+                'type': 'tool_result',
+                'index': 0,
+                'result': {
+                    'status': 'ok',
+                    'hits': [
+                        {
+                            'title': 'California weather',
+                            'href': 'https://weather.com',
+                        }
+                    ],
+                },
             },
             {'type': 'text_delta', 'text': 'The weather in california'},
             {'type': 'text_delta', 'text': ' is sunny.'},

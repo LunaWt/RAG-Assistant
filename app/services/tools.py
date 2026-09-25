@@ -16,19 +16,31 @@ new_config = use_config()
 new_config.set('DEFAULT', 'DOWNLOAD_TIMEOUT', '5')
 simpleeval.MAX_POWER = 1000
 
+
+class ToolError(Exception):
+    """A tool failure the model should read: the message becomes the tool's reply."""
+
+
 def search_knowledge_base(
     query: str, 
     filename: str | None = None,
-    ) -> str:
+    ) -> tuple[str, list[dict]]:
     """Rag system search with cosine similarity retrieval"""
     
     try:
         if filename:
-            return '\n\n'.join(vector_db.rag_search(query, filename))
+            chunks = vector_db.rag_search(query, filename)
         else:
-            return '\n\n'.join(vector_db.rag_search(query))
+            chunks = vector_db.rag_search(query)
     except Exception as e:
-        return f'Knowledge base search failed: {e}. Try web_search or answer from your own knowledge.'
+        raise ToolError(
+            f'Knowledge base search failed: {e}. Try web_search or answer from your own knowledge.'
+        ) from e
+    hits = [
+        {'title': chunk['source'], 'snippet': ' '.join(chunk['text'].split())[:240]}
+        for chunk in chunks
+    ]
+    return '\n\n'.join(chunk['text'] for chunk in chunks), hits
 
 
 def calculator(expression: str):
@@ -40,21 +52,21 @@ def calculator(expression: str):
     Result is rounded to 4 decimal places."""
     
     if not isinstance(expression, str):
-        return 'Expression must be a string'
+        raise ToolError('Expression must be a string')
     if len(expression) > 100:
-        return "Expression is too long"
+        raise ToolError("Expression is too long")
     try:
         return round(
                 number=simple_eval(expr=expression),
                 ndigits=4)
     except (NameNotDefined, FunctionNotDefined) as e:
-        return f'Forbidden variables or functions: {e}'
+        raise ToolError(f'Forbidden variables or functions: {e}') from e
     except InvalidExpression as e:
-        return f'Error in expression: {e}'
-    except SyntaxError:
-        return 'Syntax error in expression'
+        raise ToolError(f'Error in expression: {e}') from e
+    except SyntaxError as e:
+        raise ToolError('Syntax error in expression') from e
     except Exception as e:
-        return f'Error: {e}'
+        raise ToolError(f'Error: {e}') from e
 
 
 def _ddg_search(query: str) -> list[dict]:
@@ -86,6 +98,6 @@ async def web_search(query: str) -> tuple[str, list[dict]]:
             return "No text were extracted", []
         return await generate_summary(combined), searches_list
     except DDGSException as e:
-        return f'ddgs search error {e}', []
+        raise ToolError(f'ddgs search error {e}') from e
     except Exception as e:
-        return f"Some system error: {e}", []
+        raise ToolError(f"Some system error: {e}") from e

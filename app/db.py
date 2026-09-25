@@ -54,7 +54,7 @@ class Block(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"))
     type: Mapped[str]  # 'thought' | 'tool' | 'answer' | 'user-query'
-    content: Mapped[str] = mapped_column(Text)  # tool -> json {names, args, results: [{query, hits}]}
+    content: Mapped[str] = mapped_column(Text)  # tool -> json {names, args, results: [{status, hits, error?}] by call index}
     position: Mapped[int]
 
     message: Mapped["Message"] = relationship(back_populates="blocks")
