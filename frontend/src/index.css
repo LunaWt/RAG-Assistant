@@ -1,5 +1,6 @@
 :root {
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: "Golos Text Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 17px;
   color-scheme: dark;
 }
 
@@ -9,4 +10,42 @@ body {
 
 a {
   color: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Markdown from the model. StyleX cannot reach elements it does not render, so the prose
+   rhythm lives here; the wrapper is a block box, so neighbouring margins collapse. */
+.prose > :first-child {
+  margin-top: 0;
+}
+
+.prose > :last-child {
+  margin-bottom: 0;
+}
+
+.prose p,
+.prose ul,
+.prose ol {
+  margin-block: 0.75em;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.4em;
+}
+
+.prose li + li {
+  margin-top: 0.25em;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  margin-block: 1.1em 0.4em;
+  font-size: 1.05em;
+  line-height: 1.35;
 }

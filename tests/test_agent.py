@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import json
 from typing import Any
@@ -8,6 +9,7 @@ from openai import APIConnectionError, APIStatusError
 
 import app.services.agent as agent_module
 from app.services.agent import TOOLS, ToolCall, run_tool, to_messages
+from app.services.tools import ToolError
 from tests.fakes import (
     LoopingClient,
     ScriptedClient,
@@ -53,53 +55,66 @@ def fake_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
 @pytest.mark.asyncio
 async def test_run_tool_unknown_tool_name():
-    message, hits = await run_tool(call("nonexistent_tool", query="hi"))
+    message, outcome = await run_tool(call("nonexistent_tool", query="hi"))
 
     assert message["tool_call_id"] == "call_0_nonexistent_tool"
     assert "Tool not found" in message["content"]
-    assert hits == []
+    assert outcome == {"status": "error", "hits": [], "error": message["content"]}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raw_args", ["{}", ""])
 async def test_run_tool_empty_args(raw_args):
-    message, hits = await run_tool(
+    message, outcome = await run_tool(
         ToolCall(id="c0", name="calculator", raw_args=raw_args)
     )
 
     assert "Tool not found or no arguments provided" in message["content"]
-    assert hits == []
+    assert outcome["status"] == "error"
 
 
 @pytest.mark.asyncio
 async def test_run_tool_reports_broken_json_instead_of_crashing():
     """A truncated argument stream must come back as a message the model can act on."""
-    message, hits = await run_tool(
+    message, outcome = await run_tool(
         ToolCall(id="c0", name="calculator", raw_args='{"expression": "2 +')
     )
 
     assert "not a valid JSON object" in message["content"]
-    assert hits == []
+    assert outcome["status"] == "error"
 
 
 @pytest.mark.asyncio
 async def test_run_tool_wrong_arg_names():
-    message, hits = await run_tool(call("calculator", foo="2 + 2"))
+    message, outcome = await run_tool(call("calculator", foo="2 + 2"))
 
     assert message["content"].startswith("Error running tool")
-    assert hits == []
+    assert outcome["status"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_run_tool_passes_a_tool_error_to_the_model_verbatim():
+    """A tool's own failure text reaches the model unchanged, and the UI sees an error."""
+    message, outcome = await run_tool(call("calculator", expression="1 +"))
+
+    assert message["content"] == "Syntax error in expression"
+    assert outcome == {
+        "status": "error",
+        "hits": [],
+        "error": "Syntax error in expression",
+    }
 
 
 @pytest.mark.asyncio
 async def test_run_tool_sync_tool_success():
-    message, hits = await run_tool(call("calculator", expression="2 + 2"))
+    message, outcome = await run_tool(call("calculator", expression="2 + 2"))
 
     assert message == {
         "role": "tool",
         "tool_call_id": "call_0_calculator",
         "content": "4",
     }
-    assert hits == []
+    assert outcome == {"status": "ok", "hits": []}
 
 
 @pytest.mark.asyncio
@@ -110,18 +125,24 @@ async def test_run_tool_zero_is_a_valid_result():
 
 
 @pytest.mark.asyncio
-async def test_run_tool_async_tool_success(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "hits, status",
+    [([{"title": "Weather", "href": "https://example.com/ca"}], "ok"), ([], "empty")],
+)
+async def test_run_tool_async_tool_success(
+    monkeypatch: pytest.MonkeyPatch, hits: list[dict], status: str
+):
     async def fake_web_search(query: str) -> tuple[str, list[dict]]:
-        return "В Калифорнии сегодня солнечно!", [{"query": query}]
+        return "В Калифорнии сегодня солнечно!", hits
 
     monkeypatch.setitem(TOOLS, "web_search", fake_web_search)
 
-    message, hits = await run_tool(
+    message, outcome = await run_tool(
         call("web_search", query="Какая погода в калифорнии?")
     )
 
     assert message["content"] == "В Калифорнии сегодня солнечно!"
-    assert hits == [{"query": "Какая погода в калифорнии?"}]
+    assert outcome == {"status": status, "hits": hits}
 
 
 def test_maps_user_and_assistant_roles():
@@ -221,6 +242,7 @@ async def test_agent_loop_tool_turn(monkeypatch: pytest.MonkeyPatch):
             "name": ["calculator"],
             "args": [{"expression": "2+2"}],
         },
+        {"type": "tool_result", "index": 0, "result": {"status": "ok", "hits": []}},
         {"type": "thought_delta", "text": "I have the answer!"},
         {"type": "text_delta", "text": "4"},
         {"type": "done"},
@@ -231,7 +253,7 @@ async def test_agent_loop_tool_turn(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_loop_emits_tool_hits_from_an_async_tool(
+async def test_agent_loop_reports_search_hits_in_the_call_result(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Search results reach the UI as their own event, separate from tool_start."""
@@ -258,7 +280,7 @@ async def test_agent_loop_emits_tool_hits_from_an_async_tool(
             "name": ["web_search"],
             "args": [{"query": "погода в Калифорнии"}],
         },
-        {"type": "tool_hits", "query": "погода в Калифорнии", "hits": hits},
+        {"type": "tool_result", "index": 0, "result": {"status": "ok", "hits": hits}},
         {"type": "text_delta", "text": "В Калифорнии солнечно"},
         {"type": "done"},
     ]
@@ -281,9 +303,12 @@ async def test_agent_loop_runs_two_tool_rounds_in_sequence(
 
     events = [event async for event in agent_module.agent_loop("Посчитай")]
 
+    ok = {"type": "tool_result", "index": 0, "result": {"status": "ok", "hits": []}}
     assert events == [
         {"type": "tool_start", "name": ["calculator"], "args": [{"expression": "2 + 2"}]},
+        ok,
         {"type": "tool_start", "name": ["calculator"], "args": [{"expression": "4 * 10"}]},
+        ok,
         {"type": "text_delta", "text": "Итого 40"},
         {"type": "done"},
     ]
@@ -293,33 +318,56 @@ async def test_agent_loop_runs_two_tool_rounds_in_sequence(
 
 
 @pytest.mark.asyncio
-async def test_parallel_calls_are_answered_by_id(monkeypatch: pytest.MonkeyPatch):
-    """Two calls to the same tool are told apart by id, not by tool name."""
+async def test_parallel_calls_report_by_index_as_they_finish(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Call 0 fails only after call 1 has already reported. Each outcome carries its own
+    index, and the model still gets both replies in call order, told apart by id."""
+    hit = {"title": "Nevada weather", "href": "https://example.com/nv"}
+    first_reported = asyncio.Event()
+
+    async def fake_web_search(query: str) -> tuple[str, list[dict]]:
+        if query == "slow":
+            await asyncio.wait_for(first_reported.wait(), timeout=1)
+            raise ToolError("ddgs search error timeout")
+        return "Nevada is dry", [hit]
+
+    monkeypatch.setitem(TOOLS, "web_search", fake_web_search)
     client = ScriptedClient(
         turns=[
             [
-                call_chunk("calculator", index=0, expression="2 + 2"),
-                call_chunk("calculator", index=1, expression="10 / 4"),
+                call_chunk("web_search", index=0, query="slow"),
+                call_chunk("web_search", index=1, query="fast"),
             ],
-            [text_chunk("4 и 2.5")],
+            [text_chunk("Готово")],
         ]
     )
     install_client(monkeypatch, client)
 
-    events = [event async for event in agent_module.agent_loop("Посчитай оба")]
+    events = []
+    async for event in agent_module.agent_loop("Погода"):
+        events.append(event)
+        if event["type"] == "tool_result":
+            first_reported.set()
 
     assert events == [
         {
             "type": "tool_start",
-            "name": ["calculator", "calculator"],
-            "args": [{"expression": "2 + 2"}, {"expression": "10 / 4"}],
+            "name": ["web_search", "web_search"],
+            "args": [{"query": "slow"}, {"query": "fast"}],
         },
-        {"type": "text_delta", "text": "4 и 2.5"},
+        {"type": "tool_result", "index": 1, "result": {"status": "ok", "hits": [hit]}},
+        {
+            "type": "tool_result",
+            "index": 0,
+            "result": {"status": "error", "hits": [], "error": "ddgs search error timeout"},
+        },
+        {"type": "text_delta", "text": "Готово"},
         {"type": "done"},
     ]
     assert client.tool_replies(1) == [
-        {"role": "tool", "tool_call_id": "call_0_calculator", "content": "4"},
-        {"role": "tool", "tool_call_id": "call_1_calculator", "content": "2.5"},
+        {"role": "tool", "tool_call_id": "call_0_web_search", "content": "ddgs search error timeout"},
+        {"role": "tool", "tool_call_id": "call_1_web_search", "content": "Nevada is dry"},
     ]
 
 

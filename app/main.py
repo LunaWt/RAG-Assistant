@@ -304,18 +304,17 @@ def apply_event_to_blocks(blocks: list[dict], event: dict) -> None:
             blocks.append({"type": "answer", "content": event["text"]})
     elif t == "tool_start":
         blocks.append(_tool_block(event["name"], event["args"]))
-    elif t == "tool_hits":
-        # Hits follow their round's tool_start directly. An orphan gets a nameless block,
-        # because raising here would kill the producer and lose the whole answer.
-        if not blocks or blocks[-1]["type"] != "tool":
-            blocks.append(_tool_block([], []))
-        data = json.loads(blocks[-1]["content"])
-        data["results"].append({"query": event["query"], "hits": event["hits"]})
-        blocks[-1]["content"] = json.dumps(data, ensure_ascii=False)
+    elif t == "tool_result":
+        # Results follow their round's tool_start directly. Raising on anything else would
+        # kill the producer and lose the whole answer over one tool card.
+        if blocks and blocks[-1]["type"] == "tool":
+            data = json.loads(blocks[-1]["content"])
+            data["results"][event["index"]] = event["result"]
+            blocks[-1]["content"] = json.dumps(data, ensure_ascii=False)
 
 
 def _tool_block(names: list[str], args: list[dict]) -> dict:
-    data = {"names": names, "args": args, "results": []}
+    data = {"names": names, "args": args, "results": [None] * len(names)}
     return {"type": "tool", "content": json.dumps(data, ensure_ascii=False)}
 
 

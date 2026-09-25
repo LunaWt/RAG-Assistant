@@ -1,22 +1,24 @@
-export type Hit = { title: string; href: string };
+export type Hit = { title: string; href?: string; snippet?: string };
+
+export type ToolResult =
+  | { status: 'ok' | 'empty'; hits: Hit[] }
+  | { status: 'error'; hits: Hit[]; error: string };
 
 export type ChatEvent =
   | { type: 'thought_delta'; text: string }
   | { type: 'text_delta'; text: string }
   | { type: 'tool_start'; name: string[]; args: Record<string, unknown>[] }
-  | { type: 'tool_hits'; query: string; hits: Hit[] }
+  | { type: 'tool_result'; index: number; result: ToolResult }
   | { type: 'stream_reset' }
   | { type: 'done' }
   | { type: 'error'; message: string };
 
-export type ToolResult = { query: string; hits: Hit[] };
-
+/** One tool round. results[i] belongs to names[i] and stays null until that call reports. */
 export type ToolBlock = {
   type: 'tool';
   names: string[];
   args: Record<string, unknown>[];
-  running: boolean;
-  results: ToolResult[];
+  results: (ToolResult | null)[];
 };
 
 export type Block =

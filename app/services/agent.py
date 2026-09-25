@@ -8,7 +8,7 @@ from openai import APIConnectionError, APIStatusError
 
 from app.config import settings
 from app.services.llm_client import client
-from app.services.tools import calculator, search_knowledge_base, web_search
+from app.services.tools import ToolError, calculator, search_knowledge_base, web_search
 from app.services.vector_db import vector_db
 
 logger = logging.getLogger(__name__)
@@ -131,32 +131,37 @@ def tool_message(call: ToolCall, result) -> dict:
     return {"role": "tool", "tool_call_id": call.id, "content": str(result)}
 
 
-async def run_tool(call: ToolCall) -> tuple[dict, list[dict]]:
-    """Run one tool call, returning its protocol reply and any retrieval hits.
+def _failure(call: ToolCall, text: str) -> tuple[dict, dict]:
+    return tool_message(call, text), {"status": "error", "hits": [], "error": text}
+
+
+async def run_tool(call: ToolCall) -> tuple[dict, dict]:
+    """Run one tool call, returning its protocol reply and the outcome the UI shows.
 
     Every failure becomes a tool reply instead of an exception: the model needs the error
-    text to correct itself, and the protocol needs an answer for every call id.
+    text to correct itself, and the protocol needs an answer for every call id. A tool with
+    sources returns (reply, hits), and an empty hits list makes the outcome "empty".
     """
     args = call.args
     if args is None:
-        return tool_message(
-            call, "Arguments were not a valid JSON object; call the tool again."
-        ), []
+        return _failure(call, "Arguments were not a valid JSON object; call the tool again.")
     if call.name not in TOOLS or not args:
-        return tool_message(
-            call, "Tool not found or no arguments provided or arguments are empty"
-        ), []
+        return _failure(call, "Tool not found or no arguments provided or arguments are empty")
     fn = TOOLS[call.name]
     try:
         if inspect.iscoroutinefunction(fn):
-            summary, hits = await fn(**args)
+            result = await fn(**args)
         else:
-            summary, hits = await asyncio.to_thread(fn, **args), []
+            result = await asyncio.to_thread(fn, **args)
+    except ToolError as e:
+        return _failure(call, str(e))
     except Exception as e:
-        return tool_message(call, f"Error running tool: {e}"), []
+        return _failure(call, f"Error running tool: {e}")
+    summary, hits = result if isinstance(result, tuple) else (result, None)
     if summary is None:
         summary = "tool returned None"
-    return tool_message(call, summary), hits or []
+    status = "empty" if hits == [] else "ok"
+    return tool_message(call, summary), {"status": status, "hits": hits or []}
 
 
 def _assistant_text(msg: dict) -> str:
@@ -277,15 +282,27 @@ async def agent_loop(query: str, history: list[dict] | None = None):
                     "args": [call.args or {} for call in calls],
                 }
                 messages.append(turn.as_message())
-                results = await asyncio.gather(*[run_tool(call) for call in calls])
-                for call, (_, hits) in zip(calls, results):
-                    if hits:
-                        yield {
-                            "type": "tool_hits",
-                            "query": (call.args or {}).get("query", ""),
-                            "hits": hits,
-                        }
-                messages.extend(message for message, _ in results)
+                # Each call reports the moment it finishes, so the UI learns which one by
+                # index; the model still receives the replies in call order.
+                pending = {
+                    asyncio.create_task(run_tool(call)): index
+                    for index, call in enumerate(calls)
+                }
+                replies: dict[int, dict] = {}
+                try:
+                    while pending:
+                        finished, _ = await asyncio.wait(
+                            pending, return_when=asyncio.FIRST_COMPLETED
+                        )
+                        for task in finished:
+                            index = pending.pop(task)
+                            replies[index], outcome = task.result()
+                            yield {"type": "tool_result", "index": index, "result": outcome}
+                finally:
+                    # asyncio.wait leaves its tasks running when this generator is cancelled.
+                    for task in pending:
+                        task.cancel()
+                messages.extend(replies[index] for index in range(len(calls)))
                 turn = Turn()
                 async for event in stream_turn(messages, turn):
                     yield event

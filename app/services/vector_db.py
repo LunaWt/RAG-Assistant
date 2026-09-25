@@ -78,14 +78,17 @@ class VectorDB:
 
         logger.info("Indexed %d chunks of %s", len(chunks), filename)
 
-    def rag_search(self, query: str, filename: str = None) -> list[str]:
+    def rag_search(self, query: str, filename: str = None) -> list[dict]:
         query_vector = self.model.encode([query], normalize_embeddings=True).tolist()
         search_params = {"query_embeddings": query_vector, "n_results": 3}
         if filename:
             search_params["where"] = {"source": filename}
 
         results = self.collection.query(**search_params)
-        return results["documents"][0]
+        return [
+            {"text": text, "source": metadata["source"]}
+            for text, metadata in zip(results["documents"][0], results["metadatas"][0])
+        ]
 
     def list_sources(self) -> list[str]:
         data = self.collection.get(include=["metadatas"])
