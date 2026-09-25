@@ -230,13 +230,11 @@ export function UserMessage({ text }: { text: string }) {
   );
 }
 
-// Thoughts stay folded under Reasoning; tool cards stay outside it, so a status and its
-// sources are visible without opening anything.
+// Thoughts stay folded under Reasoning. Tool cards and answer text keep their arrival order
+// outside it, so a status and its sources are visible without opening anything.
 export function AssistantMessage({ blocks, streaming }: { blocks: Block[]; streaming?: boolean }) {
-  const answers = blocks.flatMap((b) => (b.type === 'answer' ? [b] : []));
   const thoughts = blocks.flatMap((b) => (b.type === 'thought' ? [b] : []));
-  const tools = blocks.flatMap((b) => (b.type === 'tool' ? [b] : []));
-  const working = streaming && answers.length === 0;
+  const working = streaming && !blocks.some((b) => b.type === 'answer');
   return (
     <div {...stylex.props(styles.assistant)}>
       {!working && thoughts.length > 0 && (
@@ -249,15 +247,18 @@ export function AssistantMessage({ blocks, streaming }: { blocks: Block[]; strea
           ))}
         </details>
       )}
-      {tools.map((block, i) => (
-        <ToolCard key={i} block={block} />
-      ))}
+      {blocks.map((block, i) => {
+        if (block.type === 'tool') return <ToolCard key={i} block={block} />;
+        if (block.type === 'answer') {
+          return (
+            <div key={i} className="prose">
+              <Markdown>{block.text}</Markdown>
+            </div>
+          );
+        }
+        return null;
+      })}
       {working && <span {...stylex.props(styles.status)}>{activityLabel(blocks)}</span>}
-      {answers.map((block, i) => (
-        <div key={i} className="prose">
-          <Markdown>{block.text}</Markdown>
-        </div>
-      ))}
     </div>
   );
 }

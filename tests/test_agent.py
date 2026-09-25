@@ -438,16 +438,18 @@ async def test_whole_tool_calls_without_an_index_stay_separate(
 
 @pytest.mark.asyncio
 async def test_thinking_tagged_in_the_content_is_a_thought(monkeypatch: pytest.MonkeyPatch):
-    """Gemma's <thought> text is shown as reasoning, and is neither the answer nor sent back."""
+    """Gemma's <thought> text is shown as reasoning, and is neither the answer nor sent back,
+    also when a marker arrives cut across two chunks."""
     client = ScriptedClient(
         turns=[
             [
-                text_chunk("<thought>need the"),
+                text_chunk("<thou"),
+                text_chunk("ght>need the"),
                 text_chunk(" calculator\n"),
                 text_chunk("</thought>"),
                 call_chunk("calculator", expression="2 + 2"),
             ],
-            [text_chunk("<thought>got 4\n"), text_chunk("</thought>2 + 2 = 4")],
+            [text_chunk("<thought>got 4\n</th"), text_chunk("ought>2 + 2 = 4")],
         ]
     )
     install_client(monkeypatch, client)

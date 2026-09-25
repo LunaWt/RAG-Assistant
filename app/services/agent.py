@@ -234,6 +234,14 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
 
     text: list[str] = []
     in_thought = False
+    held = ""
+
+    def content_event(piece: str) -> dict:
+        if in_thought:
+            return {"type": "thought_delta", "text": piece}
+        text.append(piece)
+        return {"type": "text_delta", "text": piece}
+
     stream = await client.chat.completions.create(**request)
     async for chunk in stream:
         if not chunk.choices:
@@ -246,14 +254,17 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
         )
         if reasoning:
             yield {"type": "thought_delta", "text": reasoning}
-        rest = delta.content or ""
+        rest = held + (delta.content or "")
+        held = ""
         while rest:
-            piece, tag, rest = rest.partition("</thought>" if in_thought else "<thought>")
-            if piece and in_thought:
-                yield {"type": "thought_delta", "text": piece}
-            elif piece:
-                text.append(piece)
-                yield {"type": "text_delta", "text": piece}
+            marker = "</thought>" if in_thought else "<thought>"
+            piece, tag, rest = rest.partition(marker)
+            if not tag:
+                # A marker can arrive cut across two chunks: hold back a tail that may start it.
+                cut = next((n for n in range(len(marker) - 1, 0, -1) if piece.endswith(marker[:n])), 0)
+                piece, held = piece[: len(piece) - cut], piece[len(piece) - cut :]
+            if piece:
+                yield content_event(piece)
             if tag:
                 in_thought = not in_thought
         for fragment in delta.tool_calls or []:
@@ -266,6 +277,8 @@ async def stream_turn(messages: list[dict], turn: Turn, use_tools: bool = True):
                 call.name += function.name
             if function and function.arguments:
                 call.raw_args += function.arguments
+    if held:
+        yield content_event(held)
     turn.text = "".join(text)
 
 
