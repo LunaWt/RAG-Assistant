@@ -8,6 +8,7 @@ import pytest
 from openai import APIConnectionError, APIStatusError
 
 import app.services.agent as agent_module
+import app.services.tools as tools_module
 from app.services.agent import TOOLS, ToolCall, run_tool, to_messages
 from app.services.tools import ToolError
 from tests.fakes import (
@@ -186,6 +187,22 @@ def test_empty_history_returns_empty_list():
     assert to_messages(None) == []
 
 
+def test_an_earlier_answer_is_replayed_without_its_thoughts():
+    call = {"id": "c1", "type": "function", "function": {"name": "calculator", "arguments": "{}"}}
+    context = [
+        {"role": "assistant", "content": "<thought>need math</thought>", "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "c1", "content": "4"},
+        {"role": "assistant", "content": "<thought>loop\nloop</thought>"},
+        {"role": "assistant", "content": "<thought>ok</thought>It is 4.<thought>cut off by max_t"},
+    ]
+
+    assert to_messages([{"role": "assistant", "context": context}]) == [
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        {"role": "tool", "tool_call_id": "c1", "content": "4"},
+        {"role": "assistant", "content": "It is 4."},
+    ]
+
+
 @pytest.mark.asyncio
 async def test_agent_loop_happy_path(monkeypatch: pytest.MonkeyPatch):
     client = ScriptedClient([[thought_chunk("Проверяю вопрос"), text_chunk("Готовый ответ")]])
@@ -285,6 +302,112 @@ async def test_agent_loop_reports_search_hits_in_the_call_result(
         {"type": "done"},
     ]
     assert client.tool_replies(1)[0]["content"] == "Сегодня солнечно"
+
+
+@pytest.mark.asyncio
+async def test_retrieved_pages_reach_the_model_as_images_once_per_answer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    found = iter([[4, 5], [5, 12]])
+
+    def fake_search(query: str, seen=None) -> tuple[str, list[dict]]:
+        pages = next(found)
+        return "chunk text", [{"title": "report.pdf", "snippet": "", "pages": pages}]
+
+    rendered: list[int] = []
+
+    def fake_render(path: str, index: int) -> bytes:
+        rendered.append(index)
+        return f"png{index}".encode()
+
+    monkeypatch.setitem(TOOLS, "search_knowledge_base", fake_search)
+    monkeypatch.setattr(agent_module, "render_page", fake_render)
+    monkeypatch.setattr(agent_module.settings, "answer_page_images", True)
+    client = ScriptedClient(
+        turns=[
+            [call_chunk("search_knowledge_base", query="figure")],
+            [call_chunk("search_knowledge_base", query="figure again")],
+            [text_chunk("done")],
+        ]
+    )
+    install_client(monkeypatch, client)
+
+    _ = [event async for event in agent_module.agent_loop("What does the figure show?")]
+
+    def page_labels(call_index: int) -> list[list[str]]:
+        return [
+            [part["text"] for part in m["content"][1:] if part["type"] == "text"]
+            for m in client.sent[call_index]
+            if m["role"] == "user" and isinstance(m["content"], list)
+        ]
+
+    assert rendered == [3, 4, 11]
+    assert page_labels(1) == [["report.pdf, page 4:", "report.pdf, page 5:"]]
+    assert page_labels(2) == [
+        ["report.pdf, page 4:", "report.pdf, page 5:"],
+        ["report.pdf, page 12:"],
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["../secret.pdf", "C:/Users/someone/secret.pdf"])
+async def test_a_page_reference_outside_storage_is_never_rendered(
+    monkeypatch: pytest.MonkeyPatch, source: str
+):
+    rendered: list[str] = []
+    monkeypatch.setattr(
+        agent_module, "render_page", lambda path, index: rendered.append(path) or b"png"
+    )
+    message = {"role": "user", "content": [{"type": "page_image", "source": source, "page": 1}]}
+
+    wire = await agent_module.to_wire([message], {})
+
+    assert rendered == []
+    assert wire[0]["content"] == [{"type": "text", "text": "[page image unavailable]"}]
+
+
+@pytest.mark.asyncio
+async def test_a_chunk_found_again_later_in_the_session_comes_back_as_a_reference(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    chunk = {
+        "text": "Figure 1 compares AdamW and Nexus. Nine plots follow.",
+        "source": "report.pdf",
+        "chunk": 12,
+        "pages": [4],
+    }
+    monkeypatch.setattr(tools_module.vector_db, "rag_search", lambda query: [chunk])
+    monkeypatch.setattr(agent_module, "render_page", lambda path, index: b"png")
+    monkeypatch.setattr(agent_module.settings, "answer_page_images", True)
+    client = ScriptedClient(
+        turns=[
+            [call_chunk("search_knowledge_base", query="figure")],
+            [text_chunk("Nine plots.")],
+            [call_chunk("search_knowledge_base", query="figure again")],
+            [text_chunk("Same figure.")],
+        ]
+    )
+    install_client(monkeypatch, client)
+
+    context: list[dict] = []
+    _ = [e async for e in agent_module.agent_loop("Figure?", context=context)]
+    history = [
+        {"role": "user", "content": "Figure?"},
+        {"role": "assistant", "context": context},
+    ]
+    _ = [e async for e in agent_module.agent_loop("Again?", history=history)]
+
+    def image_messages(call_index: int) -> int:
+        return sum(
+            any(part.get("type") == "image_url" for part in m["content"])
+            for m in client.sent[call_index]
+            if isinstance(m["content"], list)
+        )
+
+    assert client.tool_replies(3)[-1]["content"] == (
+        '[report.pdf #12, page 4] already shown above: "Figure 1 compares AdamW and Nexus."'
+    )
+    assert image_messages(3) == 1
 
 
 @pytest.mark.asyncio
@@ -438,8 +561,9 @@ async def test_whole_tool_calls_without_an_index_stay_separate(
 
 @pytest.mark.asyncio
 async def test_thinking_tagged_in_the_content_is_a_thought(monkeypatch: pytest.MonkeyPatch):
-    """Gemma's <thought> text is shown as reasoning, and is neither the answer nor sent back,
-    also when a marker arrives cut across two chunks."""
+    """Gemma's <thought> text is shown as reasoning, not as the answer, also when a marker
+    arrives cut across two chunks; the model gets it back with the call's signature."""
+    signature = {"google": {"thought_signature": "EiYK"}}
     client = ScriptedClient(
         turns=[
             [
@@ -447,7 +571,10 @@ async def test_thinking_tagged_in_the_content_is_a_thought(monkeypatch: pytest.M
                 text_chunk("ght>need the"),
                 text_chunk(" calculator\n"),
                 text_chunk("</thought>"),
-                call_chunk("calculator", expression="2 + 2"),
+                chunk(tool_calls=[call_fragment(
+                    id="call_0", name="calculator", arguments='{"expression": "2 + 2"}',
+                    extra_content=signature,
+                )]),
             ],
             [text_chunk("<thought>got 4\n</th"), text_chunk("ought>2 + 2 = 4")],
         ]
@@ -464,7 +591,8 @@ async def test_thinking_tagged_in_the_content_is_a_thought(monkeypatch: pytest.M
     ]
     assistant_turn = client.sent[1][-2]
     assert assistant_turn["role"] == "assistant"
-    assert assistant_turn["content"] is None
+    assert assistant_turn["content"] == "<thought>need the calculator\n</thought>"
+    assert assistant_turn["tool_calls"][0]["extra_content"] == signature
 
 
 @pytest.mark.asyncio
@@ -616,14 +744,17 @@ async def test_iteration_limit_answers_every_pending_call(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """The nudge follows an assistant turn with tool_calls, which the protocol says
-    must be answered first; an unanswered id makes the provider reject the request."""
+    must be answered first; an unanswered id makes the provider reject the request. The
+    stored context must not leave one either: the final turn's calls are never run."""
     client = LoopingClient(
+        text_chunk("still counting"),
         call_chunk("calculator", index=0, expression="2 + 2"),
         call_chunk("calculator", index=1, expression="10 / 4"),
     )
     install_client(monkeypatch, client)
+    context: list[dict] = []
 
-    [event async for event in agent_module.agent_loop("Считай без остановки")]
+    [event async for event in agent_module.agent_loop("Считай без остановки", context=context)]
 
     nudge = client.sent[-1]
     # Only replies that come after the last assistant turn count: every round reuses
@@ -635,3 +766,4 @@ async def test_iteration_limit_answers_every_pending_call(
     assert pending and pending <= answered
     assert nudge[-1] == {"role": "user", "content": NUDGE}
     assert client.requests[-1].get("tools") is None
+    assert context[-1] == {"role": "assistant", "content": "still counting"}

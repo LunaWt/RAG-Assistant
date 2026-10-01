@@ -1,6 +1,8 @@
+import re
 import simpleeval
 import trafilatura
 import asyncio
+from collections.abc import Callable
 from trafilatura.settings import use_config
 from simpleeval import simple_eval, InvalidExpression, NameNotDefined, FunctionNotDefined
 from ddgs import DDGS
@@ -24,9 +26,14 @@ class ToolError(Exception):
 def search_knowledge_base(
     query: str, 
     filename: str | None = None,
+    seen: Callable[[str], bool] = lambda block: False,
     ) -> tuple[str, list[dict]]:
-    """Rag system search with cosine similarity retrieval"""
-    
+    """Rag system search with cosine similarity retrieval.
+
+    A chunk whose labelled block `seen` reports as already in the conversation comes back
+    as a one-line reference instead of its text. The hits keep its pages either way.
+    """
+
     try:
         if filename:
             chunks = vector_db.rag_search(query, filename)
@@ -37,10 +44,33 @@ def search_knowledge_base(
             f'Knowledge base search failed: {e}. Try web_search or answer from your own knowledge.'
         ) from e
     hits = [
-        {'title': chunk['source'], 'snippet': ' '.join(chunk['text'].split())[:240]}
+        {
+            'title': chunk['source'],
+            'snippet': ' '.join(chunk['text'].split())[:240],
+            'pages': chunk.get('pages', []),
+        }
         for chunk in chunks
     ]
-    return '\n\n'.join(chunk['text'] for chunk in chunks), hits
+    blocks = []
+    for chunk in chunks:
+        block = f"{_label(chunk)}\n{chunk['text']}"
+        if seen(block):
+            block = f'{_label(chunk)} already shown above: "{_first_sentence(chunk["text"])}"'
+        blocks.append(block)
+    return '\n\n'.join(blocks), hits
+
+
+def _label(chunk: dict) -> str:
+    """[file #number, pages], so the model can match a chunk to its page image, and
+    recognise it when a later search finds it again."""
+    pages = chunk.get('pages')
+    where = f", page {', '.join(map(str, pages))}" if pages else ''
+    return f"[{chunk['source']} #{chunk['chunk']}{where}]"
+
+
+def _first_sentence(text: str) -> str:
+    flat = ' '.join(text.split())
+    return re.split(r'(?<=[.!?])\s', flat, maxsplit=1)[0][:200]
 
 
 def calculator(expression: str):

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import ForeignKey, Text
+from sqlalchemy import ForeignKey, Text, inspect, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -39,6 +39,8 @@ class Message(Base):
     session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
     role: Mapped[str]  # 'user' | 'assistant'
     created_at: Mapped[datetime] = mapped_column(default=utc_now)
+    # JSON list of what the model saw after the query, replayed as history (agent_loop).
+    context: Mapped[str | None] = mapped_column(Text, default=None)
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
     blocks: Mapped[list["Block"]] = relationship(
@@ -63,3 +65,9 @@ class Block(Base):
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # create_all adds no column to an existing table, and there is no migration tool yet.
+        columns = await conn.run_sync(
+            lambda sync: {c["name"] for c in inspect(sync).get_columns("messages")}
+        )
+        if "context" not in columns:
+            await conn.execute(text("ALTER TABLE messages ADD COLUMN context TEXT"))

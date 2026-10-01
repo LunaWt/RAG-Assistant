@@ -41,6 +41,7 @@ class VectorDB:
         chunks: list[str],
         filename: str,
         on_progress: Callable[[int, int], None] | None = None,
+        pages: list[list[int]] | None = None,
     ) -> None:
 
         ids = [f"{filename}_chunk_{i}" for i in range(len(chunks))]
@@ -56,7 +57,11 @@ class VectorDB:
             if on_progress:
                 on_progress(len(embeddings), len(chunks))
 
-        metadatas = [{"source": filename} for _ in range(len(chunks))]
+        # Chroma refuses an empty list as a metadata value, so a chunk with no pages has no key.
+        metadatas = [
+            {"source": filename, **({"pages": chunk_pages} if chunk_pages else {})}
+            for chunk_pages in (pages or [[]] * len(chunks))
+        ]
 
         self.collection.upsert(
             ids=ids,
@@ -86,8 +91,15 @@ class VectorDB:
 
         results = self.collection.query(**search_params)
         return [
-            {"text": text, "source": metadata["source"]}
-            for text, metadata in zip(results["documents"][0], results["metadatas"][0])
+            {
+                "text": text,
+                "source": metadata["source"],
+                "chunk": int(chunk_id.rsplit("_chunk_", 1)[1]),
+                "pages": metadata.get("pages", []),
+            }
+            for chunk_id, text, metadata in zip(
+                results["ids"][0], results["documents"][0], results["metadatas"][0]
+            )
         ]
 
     def list_sources(self) -> list[str]:

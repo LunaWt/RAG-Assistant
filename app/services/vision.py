@@ -15,6 +15,7 @@ from openai import (
 )
 
 from app.config import settings
+from app.services.chunker import page_marker
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ def render_page(pdf_path: str, page_number: int, dpi: int | None = None) -> byte
     return buffer.getvalue()
 
 
-def _image_part(png: bytes) -> dict:
+def image_part(png: bytes) -> dict:
     return {
         'type': 'image_url',
         'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(png).decode()},
@@ -138,7 +139,7 @@ async def _transcribe(client: AsyncOpenAI, pngs: list[bytes], model: str) -> lis
                 'role': 'user',
                 'content': [
                     {'type': 'text', 'text': prompt},
-                    *(_image_part(png) for png in pngs),
+                    *(image_part(png) for png in pngs),
                 ],
             }
         ],
@@ -311,7 +312,11 @@ def pdf_to_markdown(pdf_path: str, on_progress=None, on_page_failed=None) -> str
             await client.close()
 
     transcripts, failed = asyncio.run(run())
-    pages = [page for page in transcripts if page != BLANK_PAGE]
+    pages = [
+        f'{page_marker(number)}\n\n{page}'
+        for number, page in enumerate(transcripts, start=1)
+        if page != BLANK_PAGE
+    ]
     if len(pages) == len(failed):
         raise ValueError('No text extracted')
     return '\n\n'.join(pages)

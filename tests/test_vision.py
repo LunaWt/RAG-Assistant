@@ -211,7 +211,7 @@ def test_pdf_to_markdown_batches_and_reports_progress(
         "document.pdf", on_progress=lambda d, t: seen.append((d, t))
     )
 
-    assert text == "one\n\nthree"
+    assert text == "<page-1/>\n\none\n\n<page-3/>\n\nthree"
     assert client.batch_sizes == [2, 1]
     assert seen == [(0, 3), (2, 3), (3, 3)]
     assert client.closed
@@ -234,7 +234,10 @@ def test_a_failed_page_becomes_a_marker_in_the_indexed_text(
         "document.pdf", on_page_failed=lambda number, count: reported.append((number, count))
     )
 
-    assert text == "one\n\n[page 2 could not be transcribed]\n\nthree"
+    assert text == (
+        "<page-1/>\n\none\n\n<page-2/>\n\n[page 2 could not be transcribed]"
+        "\n\n<page-3/>\n\nthree"
+    )
     assert reported == [(2, 1)]
     assert client.closed
 
@@ -284,8 +287,8 @@ def test_each_document_gets_its_own_client(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(vision, "build_client", factory)
 
-    assert vision.pdf_to_markdown("first.pdf") == "page"
-    assert vision.pdf_to_markdown("second.pdf") == "page"
+    assert vision.pdf_to_markdown("first.pdf") == "<page-1/>\n\npage"
+    assert vision.pdf_to_markdown("second.pdf") == "<page-1/>\n\npage"
     assert len(built) == 2
     assert [client.closed for client in built] == [True, True]
 

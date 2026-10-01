@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from app.config import settings
 from app.services import vision
-from app.services.chunker import smart_chunk_text
+from app.services.chunker import chunk_with_pages
 from evals.corpus import CHUNKS, MD_DIR, PDF_DIR, SNAPSHOT, load_manifest, sha256
 
 # Kept rather than retried: production indexes the same marker, and that is what is measured.
@@ -65,7 +65,7 @@ def main() -> None:
     for doc in docs:
         fetch_pdf(doc)
         text = transcribe(doc)
-        chunks = smart_chunk_text(text, settings.chunk_size, settings.overlap)
+        chunks = [c for c, _ in chunk_with_pages(text, settings.chunk_size, settings.overlap)]
         rows += [{"doc": doc["id"], "i": i, "text": c} for i, c in enumerate(chunks)]
         snapshot["docs"][doc["id"]] = {
             **transcript_key(doc),
