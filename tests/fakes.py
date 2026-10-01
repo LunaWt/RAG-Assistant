@@ -60,12 +60,14 @@ def call_fragment(
     id: str | None = None,
     name: str | None = None,
     arguments: str | None = None,
+    extra_content: dict | None = None,
 ) -> SimpleNamespace:
     """A piece of a tool call: any field may be absent in any given chunk."""
     return SimpleNamespace(
         index=index,
         id=id,
         function=SimpleNamespace(name=name, arguments=arguments),
+        extra_content=extra_content,
     )
 
 

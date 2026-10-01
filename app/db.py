@@ -39,6 +39,8 @@ class Message(Base):
     session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id"))
     role: Mapped[str]  # 'user' | 'assistant'
     created_at: Mapped[datetime] = mapped_column(default=utc_now)
+    # JSON list of what the model saw after the query, replayed as history (agent_loop).
+    context: Mapped[str | None] = mapped_column(Text, default=None)
 
     session: Mapped["ChatSession"] = relationship(back_populates="messages")
     blocks: Mapped[list["Block"]] = relationship(

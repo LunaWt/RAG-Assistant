@@ -18,7 +18,7 @@ from app.db import Block, ChatSession, Message, SessionLocal, init_db
 from app.services.vector_db import vector_db
 from app.config import settings
 from app.services.agent import agent_loop
-from app.services.chunker import smart_chunk_text
+from app.services.chunker import chunk_with_pages, smart_chunk_text
 from app.services.jobs import jobs
 from app.services.llm_client import generate_title
 from app.services.parser import SUPPORTED_SUFFIXES, extract_text
@@ -157,15 +157,20 @@ def index_document(staged_path: Path, filename: str, job_id: str) -> None:
             ),
         )
         jobs.update(job_id, stage="chunking")
-        chunks = smart_chunk_text(text, settings.chunk_size, settings.overlap)
+        # Only vision transcripts carry page markers; in any other file the text is literal.
+        if staged_path.suffix.lower() == ".pdf":
+            chunks = chunk_with_pages(text, settings.chunk_size, settings.overlap)
+        else:
+            chunks = [(c, []) for c in smart_chunk_text(text, settings.chunk_size, settings.overlap)]
         jobs.update(job_id, stage="embedding", total_chunks=len(chunks))
         with name_lock(filename):
             vector_db.add_document_to_db(
-                chunks,
+                [chunk for chunk, _ in chunks],
                 filename,
                 on_progress=lambda done, total: jobs.update(
                     job_id, done_chunks=done, total_chunks=total
                 ),
+                pages=[pages for _, pages in chunks],
             )
             staged_path.replace(Path(settings.storage_dir) / filename)
         result = {"status": "done", "stage": "done", "chunks": len(chunks)}
@@ -319,7 +324,8 @@ def _tool_block(names: list[str], args: list[dict]) -> dict:
 
 
 async def load_history(session_id: int) -> list[dict] | None:
-    """Flat history for the agent: user text + assistant answer blocks. None = no such session."""
+    """History for the agent: user text, and per answer its stored context, or the answer
+    text when it has none. None = no such session."""
     async with SessionLocal() as db:
         chat = await db.scalar(
             select(ChatSession)
@@ -330,6 +336,9 @@ async def load_history(session_id: int) -> list[dict] | None:
         return None
     history: list[dict] = []
     for m in chat.messages:
+        if m.context:
+            history.append({"role": m.role, "context": json.loads(m.context)})
+            continue
         text = "\n".join(
             b.content
             for b in m.blocks
@@ -356,12 +365,15 @@ async def set_session_title(session_id: int, query: str) -> None:
             await db.commit()
 
 
-async def save_message(session_id: int, role: str, blocks: list[dict]) -> None:
+async def save_message(
+    session_id: int, role: str, blocks: list[dict], context: list[dict] | None = None
+) -> None:
     async with SessionLocal() as db:
         db.add(
             Message(
                 session_id=session_id,
                 role=role,
+                context=json.dumps(context, ensure_ascii=False) if context else None,
                 blocks=[
                     Block(type=b["type"], content=b["content"], position=i)
                     for i, b in enumerate(blocks)
@@ -386,14 +398,15 @@ async def run_agent_to_queue(
     never loses the answer. `None` on the queue signals end of stream.
     """
     blocks: list[dict] = []
+    context: list[dict] = []
     try:
-        async for event in agent_loop(query, history=history):
+        async for event in agent_loop(query, history=history, context=context):
             t = event["type"]
             if t == "stream_reset":
                 blocks.clear()
             elif t == "done":
                 if session_id is not None and blocks:
-                    await save_message(session_id, "assistant", blocks)
+                    await save_message(session_id, "assistant", blocks, context)
             else:
                 apply_event_to_blocks(blocks, event)
             await queue.put(event)
@@ -403,7 +416,9 @@ async def run_agent_to_queue(
 
 @app.post("/chat")
 async def chat_rag_bot(body: ChatRequest) -> StreamingResponse:
-    history = body.history
+    # A context is replayed verbatim, tool replies and page paths included, so it is taken
+    # only from the database and never from what the client sends.
+    history = [{k: v for k, v in m.items() if k != "context"} for m in body.history]
     if body.session_id is not None:
         history = await load_history(body.session_id)
         if history is None:

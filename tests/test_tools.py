@@ -40,9 +40,9 @@ def test_calculator_error_messages(expression, expected_prefix):
 def test_search_knowledge_base_without_filename(monkeypatch: pytest.MonkeyPatch):
     def fake_rag_search(query: str) -> list[dict]:
         return [
-            {"text": query, "source": "a.pdf"},
-            {"text": "Информация\nпро Калифорнию.", "source": "a.pdf"},
-            {"text": "Информация про нейронные сети", "source": "b.pdf"},
+            {"text": query, "source": "a.pdf", "chunk": 3, "pages": [4]},
+            {"text": "Информация\nпро Калифорнию.", "source": "a.pdf", "chunk": 4, "pages": [4, 5]},
+            {"text": "Информация про нейронные сети", "source": "b.txt", "chunk": 0, "pages": []},
         ]
 
     monkeypatch.setattr(
@@ -54,22 +54,22 @@ def test_search_knowledge_base_without_filename(monkeypatch: pytest.MonkeyPatch)
     text, hits = search_knowledge_base(query="California search")
 
     assert text == (
-        "California search\n\n"
-        "Информация\nпро Калифорнию.\n\n"
-        "Информация про нейронные сети"
+        "[a.pdf #3, page 4]\nCalifornia search\n\n"
+        "[a.pdf #4, page 4, 5]\nИнформация\nпро Калифорнию.\n\n"
+        "[b.txt #0]\nИнформация про нейронные сети"
     )
     assert hits == [
-        {"title": "a.pdf", "snippet": "California search"},
-        {"title": "a.pdf", "snippet": "Информация про Калифорнию."},
-        {"title": "b.pdf", "snippet": "Информация про нейронные сети"},
+        {"title": "a.pdf", "snippet": "California search", "pages": [4]},
+        {"title": "a.pdf", "snippet": "Информация про Калифорнию.", "pages": [4, 5]},
+        {"title": "b.txt", "snippet": "Информация про нейронные сети", "pages": []},
     ]
 
 
 def test_search_knowledge_base_with_filename(monkeypatch: pytest.MonkeyPatch):
     def fake_rag_search_with_filename(query: str, filename: str) -> list[dict]:
         return [
-            {"text": text, "source": filename}
-            for text in (query, filename, "Информация про Калифорнию.")
+            {"text": text, "source": filename, "chunk": number}
+            for number, text in enumerate((query, filename, "Информация про Калифорнию."))
         ]
 
     monkeypatch.setattr(
@@ -83,7 +83,9 @@ def test_search_knowledge_base_with_filename(monkeypatch: pytest.MonkeyPatch):
     )
 
     assert text == (
-        "California search\n\nFile about California\n\nИнформация про Калифорнию."
+        "[File about California #0]\nCalifornia search\n\n"
+        "[File about California #1]\nFile about California\n\n"
+        "[File about California #2]\nИнформация про Калифорнию."
     )
 
 

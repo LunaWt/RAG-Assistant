@@ -7,7 +7,10 @@ LOOPBACK_HOSTS = frozenset({'localhost', '127.0.0.1', '::1'})
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf_8')
+    # Without hide_input_in_errors a missing field prints every loaded value, keys included.
+    model_config = SettingsConfigDict(
+        env_file='.env', env_file_encoding='utf_8', hide_input_in_errors=True
+    )
 
     ## LLM
     llm_api_key: str
@@ -18,6 +21,9 @@ class Settings(BaseSettings):
     hf_token: str
     main_model: str = 'openrouter/free'
     summary_model: str = 'inclusionai/ling-3.0-flash-fin:free'
+    # Each knowledge-base hit from a PDF brings its page images into the answer. Off for a
+    # main_model without image input, which would answer the next request with a 400.
+    answer_page_images: bool = True
     
     ## PROMPTS
     main_agent_prompt: str = """
@@ -28,7 +34,8 @@ class Settings(BaseSettings):
 
     Answer directly from your own knowledge whenever you can. Call a tool ONLY when the
     question genuinely needs it: the user's documents, fresh/real-time facts, or exact math.
-    Prefer ONE well-formed call per need. Never repeat the same search with reworded
+    Prefer ONE well-formed call per need. Independent needs can go out together as parallel
+    tool calls in one turn; they run at the same time. Never repeat the same search with reworded
     queries — if results are weak, reason over what you already have and answer with caveats.
     As soon as you have enough to answer, stop calling tools and respond. Be fast: aim for
     0-3 tool calls total, more only if the task truly requires it.

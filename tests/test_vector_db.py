@@ -153,16 +153,20 @@ def test_delete_document_only_deletes_source_and_returns_count(
 def test_rag_search_ranks_matching_documents_and_filters_filename(
     vector_db: vector_db_module.VectorDB,
 ) -> None:
-    vector_db.add_document_to_db(["California facts", "Neural networks"], "science.pdf")
+    vector_db.add_document_to_db(
+        ["California facts", "Neural networks"], "science.pdf", pages=[[2], [2, 3]]
+    )
     vector_db.add_document_to_db(["Apple nutrition"], "food.pdf")
 
     results = vector_db.rag_search("California")
-    assert results[0] == {"text": "California facts", "source": "science.pdf"}
-    assert {r["text"] for r in results} == {
-        "California facts",
-        "Neural networks",
-        "Apple nutrition",
+    assert results[0] == {
+        "text": "California facts", "source": "science.pdf", "chunk": 0, "pages": [2]
+    }
+    assert {(r["text"], r["chunk"]) for r in results} == {
+        ("California facts", 0),
+        ("Neural networks", 1),
+        ("Apple nutrition", 0),
     }
     assert vector_db.rag_search("California", filename="food.pdf") == [
-        {"text": "Apple nutrition", "source": "food.pdf"}
+        {"text": "Apple nutrition", "source": "food.pdf", "chunk": 0, "pages": []}
     ]
