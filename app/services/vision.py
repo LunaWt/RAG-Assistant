@@ -41,6 +41,14 @@ class EmptyResponse(RuntimeError):
     """A 200 with no choices in it. Seen as a provider hiccup, not as a bad page."""
 
 
+class ContentFiltered(RuntimeError):
+    """The provider withheld the answer, e.g. Google's RECITATION filter on a published page.
+
+    Deterministic for one model and one page (2 of 2 on 2 Oct 2026), while the fallback model
+    transcribed the same page in full: so no retry on the same model, straight to the next.
+    """
+
+
 # Retried, because they clear on their own: the free tier answers 429 on burst and Google
 # returns 500 INTERNAL under load.
 TRANSIENT_ERRORS = (
@@ -53,8 +61,8 @@ TRANSIENT_ERRORS = (
 # What "this page did not come back" means for the caller that has to choose between a marker
 # and a failed upload. The two batch errors join the list only because on a *single* page they
 # are no longer splittable: one page of Markdown that will not fit the output cap, or a model
-# answering with a page count it was not sent.
-PAGE_FAILURES = (*TRANSIENT_ERRORS, PageCountMismatch, BatchTruncated)
+# answering with a page count it was not sent. A page every model withheld is one lost page too.
+PAGE_FAILURES = (*TRANSIENT_ERRORS, PageCountMismatch, BatchTruncated, ContentFiltered)
 # Not retried on the same model and not a page failure either: a model id that no longer
 # resolves is the case the fallback exists for. Google retires ids (gemini-3.1-flash-lite-preview
 # went on 2026-05-25) and a config can outlive one.
@@ -123,8 +131,9 @@ def image_part(png: bytes) -> dict:
 
 def _split_pages(text: str) -> list[str]:
     parts = text.split(settings.vision_page_separator)
-    if parts and not parts[0].strip():
-        parts = parts[1:]
+    # Flash-Lite sometimes opens with a run of bare separators, 2 to 12 on one page (2 Oct 2026).
+    while parts and not parts[0].strip():
+        parts.pop(0)
     return [part.strip() for part in parts]
 
 
@@ -155,6 +164,8 @@ async def _transcribe(client: AsyncOpenAI, pngs: list[bytes], model: str) -> lis
         raise BatchTruncated(
             'Vision model hit the output limit; page transcript is incomplete'
         )
+    if (choice.finish_reason or '').startswith('content_filter'):
+        raise ContentFiltered(f'answer withheld: {choice.finish_reason}')
     pages = _split_pages(choice.message.content or '')
     # The other silent failure: the model transcribes six of ten pages, emits six separators and
     # still finishes with "stop". Without this check the document loses four pages and no error
@@ -194,14 +205,23 @@ async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]
 
     Only transient errors are retried. A truncated batch or a page-count mismatch is not
     transient — the same images and the same prompt produce it again — so it leaves here
-    immediately for the caller to split into single pages.
+    immediately for the caller to split into single pages. A withheld single page goes straight
+    to the next model.
     """
     transient: Exception | None = None
+    filtered: ContentFiltered | None = None
     gone: Exception = RuntimeError('no vision model configured')
     for model in _models():
         for attempt in range(settings.vision_attempts):
             try:
                 return await _transcribe(client, pngs, model)
+            except ContentFiltered as error:
+                # A batch splits first, so the other pages stay on the primary model.
+                if len(pngs) > 1:
+                    raise
+                filtered = error
+                logger.warning('Vision model %s withheld a page: %s', model, error)
+                break
             except MODEL_GONE as error:
                 gone = error
                 logger.warning('Vision model %s does not resolve: %s', model, error)
@@ -218,6 +238,8 @@ async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]
         # One model missing and the other merely busy is still a page problem, so the transient
         # error wins: it is in PAGE_FAILURES, so the caller can isolate the page and carry on.
         raise transient
+    if filtered is not None:
+        raise filtered
     # Every model 404s. Not a marker in the text: every page will fail the same way, and the
     # operator needs to read the model name rather than a count of unreadable pages. ValueError,
     # so index_document reports this sentence instead of a generic server error.
