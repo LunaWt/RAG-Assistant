@@ -75,6 +75,13 @@ class Settings(BaseSettings):
     # offers 'gemini-flash-lite-latest', deliberately not used, because an alias that floats can
     # silently become the primary and the fallback at once.
     vision_fallback_model: str = 'gemini-3.1-flash-lite'
+    # Last resort for a single page that both Gemini models withhold. Google withholds some pages
+    # of well-known papers on both under RECITATION (2 Oct 2026: Engram p1-4, Kimi Linear p1,
+    # 6, 7); Muse Glimmer on NVIDIA build transcribed such pages faithfully, at 47-143 s a
+    # page, so it never takes a batch. Off while the key is empty.
+    vision_third_model: str = 'meta/muse-glimmer-30b'
+    vision_third_base_url: str = 'https://integrate.api.nvidia.com/v1'
+    vision_third_api_key: str = ''
     # 150 dpi is the usual OCR floor; below it small type breaks, above it the base64 payload
     # grows ~4/3 of an already quadratic pixel count for no accuracy gain.
     vision_dpi: int = 150
@@ -123,7 +130,7 @@ class Settings(BaseSettings):
     ## STORAGE
     storage_dir: str = 'app/storage'
 
-    @field_validator('llm_base_url', 'vision_base_url')
+    @field_validator('llm_base_url', 'vision_base_url', 'vision_third_base_url')
     @classmethod
     def require_encrypted_transport(cls, url: str, info: ValidationInfo) -> str:
         # The API key travels in the Authorization header of every request, so a plain http
