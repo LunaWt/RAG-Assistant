@@ -93,6 +93,32 @@ async def test_single_page_mismatch_is_not_retried_forever() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_run_of_leading_separators_is_one_page() -> None:
+    client = FakeVisionClient(response(f"{SEP}\n{SEP}\n{SEP}\none"))
+
+    assert await vision.pages_to_markdown(client, [b"a"]) == ["one"]
+
+
+@pytest.mark.asyncio
+async def test_a_withheld_page_goes_straight_to_the_fallback(
+    no_sleeping: list[float],
+) -> None:
+    """Google's RECITATION filter withholds the same page every time, on one model only."""
+    withheld = response("", finish_reason="content_filter: RECITATION")
+    client = FakeVisionClient(withheld, response(f"{SEP}\none"))
+
+    assert await vision.pages_to_markdown(client, [b"a"]) == ["one"]
+    assert client.models == ["primary", "fallback"]
+    assert no_sleeping == []
+
+    # Withheld by both models (engram p2, 2 Oct 2026), it must stay a page failure, which
+    # becomes a marker, not the "no vision model" error that fails the whole document.
+    with pytest.raises(vision.ContentFiltered):
+        await vision.pages_to_markdown(FakeVisionClient(withheld, withheld), [b"a"])
+    assert issubclass(vision.ContentFiltered, tuple(vision.PAGE_FAILURES))
+
+
+@pytest.mark.asyncio
 async def test_transient_error_is_retried_on_the_same_model(
     no_sleeping: list[float],
 ) -> None:
@@ -153,12 +179,19 @@ async def test_truncated_batch_falls_back_to_one_call_per_page() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "reply", [f"{SEP}\nonly one", f"{SEP}\n{SEP}\ntwo"], ids=["short", "empty page"]
+    "reply",
+    [
+        response(f"{SEP}\nonly one"),
+        response(f"{SEP}\none\n{SEP}\n"),
+        response("", finish_reason="content_filter: RECITATION"),
+        response(""),
+    ],
+    ids=["short", "empty page", "withheld", "empty reply"],
 )
-async def test_short_batch_falls_back_to_one_call_per_page(reply: str) -> None:
+async def test_short_batch_falls_back_to_one_call_per_page(reply: SimpleNamespace) -> None:
     """Two pages in, one page back: the batch is retried page by page rather than accepted."""
     client = FakeVisionClient(
-        response(reply),
+        reply,
         response(f"{SEP}\none"),
         response(f"{SEP}\ntwo"),
     )
