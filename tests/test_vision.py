@@ -63,6 +63,9 @@ def two_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "vision_attempts", 2)
     monkeypatch.setattr(settings, "vision_model", "primary")
     monkeypatch.setattr(settings, "vision_fallback_model", "fallback")
+    monkeypatch.setattr(settings, "vision_third_model", "third")
+    # A key in a developer's .env must not send a test's failed page to NVIDIA.
+    monkeypatch.setattr(settings, "vision_third_api_key", "")
 
 
 @pytest.mark.asyncio
@@ -299,10 +302,15 @@ def test_too_many_failed_pages_fail_the_whole_document(
     stub_pdf(monkeypatch, 3)
     client = FakeVisionClient(*[transient()] * 4)
     monkeypatch.setattr(vision, "build_client", lambda: client)
+    # Only a withheld page goes to the third model, so it cannot hide a dead key either.
+    third = FakeVisionClient(response(f"{SEP}\nslow page"))
+    monkeypatch.setattr(vision, "build_third_client", lambda: third)
 
     with pytest.raises(ValueError, match="1 of 3 pages"):
         vision.pdf_to_markdown("document.pdf")
     assert client.closed
+    assert third.batch_sizes == []
+    assert third.closed
 
 
 def test_each_document_gets_its_own_client(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,3 +410,46 @@ async def test_an_empty_response_is_a_page_failure_not_a_document_failure() -> N
 
     assert await vision.pages_to_markdown(client, [b"a"]) == ["one"]
     assert issubclass(vision.EmptyResponse, tuple(vision.PAGE_FAILURES))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("third_reply", "expected", "failed"),
+    [
+        (response(f"{SEP}\nrescued"), ["rescued"], []),
+        (gone(), ["[page 1 could not be transcribed]"], [1]),
+    ],
+    ids=["rescued", "third fails too"],
+)
+async def test_a_page_both_gemini_models_withhold_goes_to_the_third_model(
+    third_reply, expected: list[str], failed: list[int]
+) -> None:
+    """Whatever the third model does, the page ends transcribed or as a marker, never worse."""
+    withheld = response("", finish_reason="content_filter: RECITATION")
+    client = FakeVisionClient(withheld, withheld)
+    third = FakeVisionClient(third_reply)
+    noted: list[int] = []
+
+    assert await vision._transcribe_batch(client, [b"a"], 1, noted.append, third) == expected
+    assert client.models == ["primary", "fallback"]
+    assert third.models == ["third"]
+    assert noted == failed
+
+
+def test_a_withheld_page_reaches_the_third_client_through_pdf_to_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    withheld = response("", finish_reason="content_filter: RECITATION")
+    client = FakeVisionClient(withheld, withheld)
+    third = FakeVisionClient(response(f"{SEP}\nrescued"))
+    stub_pdf(monkeypatch, 1)
+    monkeypatch.setattr(vision, "build_client", lambda: client)
+    monkeypatch.setattr(vision, "build_third_client", lambda: third)
+
+    assert vision.pdf_to_markdown("document.pdf") == "<page-1/>\n\nrescued"
+    assert third.batch_sizes == [1]
+    assert client.closed and third.closed
+
+
+def test_no_third_client_without_a_key() -> None:
+    assert vision.build_third_client() is None

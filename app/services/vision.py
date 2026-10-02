@@ -102,6 +102,18 @@ def build_client() -> AsyncOpenAI:
     return AsyncOpenAI(**kwargs)
 
 
+def build_third_client() -> AsyncOpenAI | None:
+    """The last-resort model's client for one document, or None when it has no key."""
+    if not (settings.vision_third_model and settings.vision_third_api_key):
+        return None
+    return AsyncOpenAI(
+        api_key=settings.vision_third_api_key,
+        base_url=settings.vision_third_base_url,
+        timeout=httpx2.Timeout(settings.vision_timeout, connect=settings.llm_connect_timeout),
+        max_retries=0,
+    )
+
+
 def page_count(pdf_path: str) -> int:
     pdf = pypdfium2.PdfDocument(pdf_path)
     try:
@@ -200,7 +212,9 @@ def _models() -> list[str]:
     return [settings.vision_model]
 
 
-async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]:
+async def pages_to_markdown(
+    client: AsyncOpenAI, pngs: list[bytes], models: list[str] | None = None
+) -> list[str]:
     """One batch of page images, retried on the primary model and then on the fallback.
 
     Only transient errors are retried. A truncated batch or a page-count mismatch is not
@@ -211,7 +225,8 @@ async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]
     transient: Exception | None = None
     filtered: ContentFiltered | None = None
     gone: Exception = RuntimeError('no vision model configured')
-    for model in _models():
+    models = models or _models()
+    for model in models:
         for attempt in range(settings.vision_attempts):
             try:
                 return await _transcribe(client, pngs, model)
@@ -244,7 +259,7 @@ async def pages_to_markdown(client: AsyncOpenAI, pngs: list[bytes]) -> list[str]
     # operator needs to read the model name rather than a count of unreadable pages. ValueError,
     # so index_document reports this sentence instead of a generic server error.
     raise ValueError(
-        f'No configured vision model is available ({", ".join(_models())}): {gone}'
+        f'No configured vision model is available ({", ".join(models)}): {gone}'
     ) from gone
 
 
@@ -260,14 +275,34 @@ def _placeholder(number: int) -> str:
     return f'[page {number} could not be transcribed]'
 
 
+async def _last_resort(third: AsyncOpenAI | None, png: bytes, number: int) -> list[str] | None:
+    if third is None:
+        return None
+    try:
+        return await pages_to_markdown(third, [png], [settings.vision_third_model])
+    # Any failure, a 404 or a refused request included: this step may only ever save a page,
+    # never fail a document that would otherwise have indexed with a marker.
+    except Exception:
+        logger.exception(
+            'Vision model %s could not transcribe page %d either',
+            settings.vision_third_model, number,
+        )
+        return None
+
+
 async def _transcribe_batch(
-    client: AsyncOpenAI, pngs: list[bytes], first_number: int, note_failed
+    client: AsyncOpenAI,
+    pngs: list[bytes],
+    first_number: int,
+    note_failed,
+    third: AsyncOpenAI | None = None,
 ) -> list[str]:
     """A batch, degraded to one call per page as soon as the batch as a whole fails.
 
     Splitting fixes three different failures: a batch whose Markdown overflows the output cap,
     a model that answers with fewer pages than it was sent, and one unreadable page taking nine
-    readable ones down with it. What survives the split becomes a marker.
+    readable ones down with it. A page every Gemini model withheld goes to the third model when
+    one is configured; any other failure, and what the third model cannot save, becomes a marker.
     """
     if len(pngs) > 1:
         try:
@@ -282,10 +317,19 @@ async def _transcribe_batch(
         number = first_number + offset
         try:
             transcripts.extend(await pages_to_markdown(client, [png]))
+            continue
+        # Only a withheld page: a dead or exhausted Gemini key fails every page, and sending
+        # each one to a model at a minute a page would hide it from the failed-page ceiling.
+        except ContentFiltered:
+            logger.warning('Vision models %s withheld page %d', _models(), number)
+            rescued = await _last_resort(third, png, number)
+            if rescued is not None:
+                transcripts.extend(rescued)
+                continue
         except PAGE_FAILURES:
             logger.exception('Vision could not transcribe page %d', number)
-            transcripts.append(_placeholder(number))
-            note_failed(number)
+        transcripts.append(_placeholder(number))
+        note_failed(number)
     return transcripts
 
 
@@ -304,6 +348,7 @@ def pdf_to_markdown(pdf_path: str, on_progress=None, on_page_failed=None) -> str
 
     async def run() -> tuple[list[str], list[int]]:
         client = build_client()
+        third = build_third_client()
         failed: list[int] = []
 
         def note_failed(number: int) -> None:
@@ -325,13 +370,15 @@ def pdf_to_markdown(pdf_path: str, on_progress=None, on_page_failed=None) -> str
                 batch = range(start, min(start + settings.vision_batch_pages, total))
                 pngs = [render_page(pdf_path, number) for number in batch]
                 transcripts.extend(
-                    await _transcribe_batch(client, pngs, start + 1, note_failed)
+                    await _transcribe_batch(client, pngs, start + 1, note_failed, third)
                 )
                 if on_progress:
                     on_progress(len(transcripts), total)
             return transcripts, failed
         finally:
             await client.close()
+            if third is not None:
+                await third.close()
 
     transcripts, failed = asyncio.run(run())
     pages = [
